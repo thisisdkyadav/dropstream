@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>P2P File Transfer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>P2P File Transfer</h1>
+          <p>Direct browser-to-browser transfer using WebRTC. The Worker only matches peers.</p>
+        </div>
+        <div class="status" id="connectionState">Not connected</div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel controls">
+          <label>
+            Room code
+            <div class="room-row">
+              <input id="roomInput" autocomplete="off" spellcheck="false" />
+              <button id="newRoomButton" type="button">New</button>
+            </div>
+          </label>
+
+          <div class="role-picker" role="group" aria-label="Device role">
+            <button class="active" id="senderRole" type="button">Send</button>
+            <button id="receiverRole" type="button">Receive</button>
+          </div>
+
+          <button class="primary" id="connectButton" type="button">Connect</button>
+          <button class="hidden" id="disconnectButton" type="button">Disconnect</button>
+        </div>
+
+        <div class="panel transfer hidden" id="transferPanel">
+          <div class="notice" id="noticeText">Waiting for the other device.</div>
+
+          <label class="file-picker sender-action" id="filePicker">
+            <span>Choose file</span>
+            <input id="fileInput" type="file" />
+          </label>
+
+          <div class="file-card sender-action" id="fileCard">
+            <div>
+              <strong id="fileName">No file selected</strong>
+              <span id="fileSize"></span>
+            </div>
+            <button class="primary" id="sendButton" type="button" disabled>Send file</button>
+          </div>
+
+          <div class="progress-area hidden" id="progressArea">
+            <div class="meter" aria-label="Transfer progress">
+              <div id="progressBar"></div>
+            </div>
+
+            <div class="stats">
+              <span id="progressText">0%</span>
+              <span id="speedText">0 MB/s</span>
+              <span id="receivedText">0 B</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="modal-backdrop hidden" id="incomingModal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="incomingTitle">
+        <h2 id="incomingTitle">Incoming file</h2>
+        <p id="incomingDetails"></p>
+        <div class="modal-actions">
+          <button id="cancelIncomingButton" type="button">Cancel</button>
+          <button class="primary" id="modalSaveButton" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
