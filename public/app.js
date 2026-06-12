@@ -5,12 +5,17 @@ const disconnectButton = document.querySelector("#disconnectButton");
 const senderRole = document.querySelector("#senderRole");
 const receiverRole = document.querySelector("#receiverRole");
 const fileInput = document.querySelector("#fileInput");
+const filePicker = document.querySelector("#filePicker");
+const fileCard = document.querySelector("#fileCard");
 const sendButton = document.querySelector("#sendButton");
 const fileName = document.querySelector("#fileName");
 const fileSize = document.querySelector("#fileSize");
 const connectionState = document.querySelector("#connectionState");
+const statusPill = document.querySelector("#statusPill");
 const transferPanel = document.querySelector("#transferPanel");
 const noticeText = document.querySelector("#noticeText");
+const pathChip = document.querySelector("#pathChip");
+const receiveWait = document.querySelector("#receiveWait");
 const incomingModal = document.querySelector("#incomingModal");
 const incomingDetails = document.querySelector("#incomingDetails");
 const modalSaveButton = document.querySelector("#modalSaveButton");
@@ -21,13 +26,6 @@ const progressText = document.querySelector("#progressText");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
 const senderActions = document.querySelectorAll(".sender-action");
-const diagLog = document.querySelector("#diagLog");
-const diagVerdict = document.querySelector("#diagVerdict");
-const diagIpv6 = document.querySelector("#diagIpv6");
-const diagPath = document.querySelector("#diagPath");
-const diagIce = document.querySelector("#diagIce");
-const copyDiagButton = document.querySelector("#copyDiagButton");
-const clearDiagButton = document.querySelector("#clearDiagButton");
 
 const chunkSize = 64 * 1024;
 const maxBufferedAmount = 1 * 1024 * 1024;
@@ -46,8 +44,7 @@ let startedAt = 0;
 let receiverReadyResolve;
 let receiverReadyReject;
 let isConnected = false;
-let sawIpv6Local = false;
-let candidateCounts = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+let transferActive = false;
 let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 roomInput.value = createRoomId();
@@ -83,16 +80,41 @@ modalSaveButton.addEventListener("click", () => {
 cancelIncomingButton.addEventListener("click", cancelIncomingFile);
 
 fileInput.addEventListener("change", () => {
-  selectedFile = fileInput.files?.[0];
-  fileName.textContent = selectedFile ? selectedFile.name : "No file selected";
-  fileSize.textContent = selectedFile ? formatBytes(selectedFile.size) : "";
-  if (selectedFile) {
-    showNotice("Ready to send when the receiver is connected.");
-  }
-  updateSendState();
+  handleFileSelected(fileInput.files?.[0]);
+});
+
+for (const eventName of ["dragenter", "dragover"]) {
+  filePicker.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    filePicker.classList.add("dragover");
+  });
+}
+
+for (const eventName of ["dragleave", "drop"]) {
+  filePicker.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    filePicker.classList.remove("dragover");
+  });
+}
+
+filePicker.addEventListener("drop", (event) => {
+  handleFileSelected(event.dataTransfer?.files?.[0]);
 });
 
 renderUi();
+
+function handleFileSelected(file) {
+  if (!file) {
+    return;
+  }
+
+  selectedFile = file;
+  fileName.textContent = file.name;
+  fileSize.textContent = formatBytes(file.size);
+  showNotice("Ready to send when the receiver is connected.");
+  updateSendState();
+  renderUi();
+}
 
 function setRole(nextRole) {
   role = nextRole;
@@ -117,7 +139,6 @@ async function connect() {
 
   connectButton.disabled = true;
   renderUi();
-  resetDiagnostics();
   await loadIceServers();
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -133,7 +154,7 @@ async function connect() {
   socket.addEventListener("close", () => {
     isConnected = false;
     hideIncomingModal();
-    setStatus("Not connected");
+    setStatus("Offline");
     showNotice("Connect to start a room.");
     connectButton.disabled = false;
     renderUi();
@@ -153,16 +174,13 @@ async function loadIceServers() {
     const data = await response.json();
     if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
       iceServers = data.iceServers;
-      const hasTurn = iceServers.some((server) =>
-        [].concat(server.urls).some((url) => String(url).startsWith("turn"))
-      );
-      logDiag(`Loaded ${iceServers.length} ICE servers${hasTurn ? " (TURN relay enabled)" : " (STUN only)"}.`);
+      console.debug("[ice] loaded servers", iceServers);
       return;
     }
     throw new Error("empty config");
   } catch (error) {
     iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
-    logDiag(`TURN config unavailable (${error.message}); falling back to STUN only.`);
+    console.warn(`[ice] TURN config unavailable (${error.message}); STUN only.`);
   }
 }
 
@@ -171,52 +189,28 @@ function createPeer() {
 
   peer.addEventListener("icecandidate", (event) => {
     if (event.candidate) {
-      logLocalCandidate(event.candidate);
+      console.debug("[ice] local", describeCandidate(event.candidate));
       signal({ type: "candidate", candidate: event.candidate });
-    } else {
-      logDiag(`Gathering complete: ${summarizeCandidates(candidateCounts)}`);
-      if (!sawIpv6Local) {
-        logDiag("No IPv6 candidate gathered on this device — IPv6 path unavailable here.");
-      }
-      const turnConfigured = iceServers.some((server) =>
-        [].concat(server.urls).some((url) => String(url).startsWith("turn"))
-      );
-      if (turnConfigured && candidateCounts.relay === 0) {
-        logDiag("⚠ TURN was configured but produced NO relay candidate — allocation failed (see ICE server error above: 401=bad creds, 701=unreachable).");
-        setVerdict("TURN allocation failed", "is-bad");
-      }
     }
   });
 
   peer.addEventListener("icecandidateerror", (event) => {
-    // 401 = TURN credentials rejected, 403 = forbidden, 701 = server unreachable.
-    logDiag(
-      `ICE server error · code=${event.errorCode} · "${event.errorText || ""}" · ${event.url || ""}`
-    );
-  });
-
-  peer.addEventListener("icegatheringstatechange", () => {
-    logDiag(`ICE gathering: ${peer.iceGatheringState}`);
+    // 401 = TURN credentials rejected, 701 = server unreachable.
+    console.warn(`[ice] server error code=${event.errorCode} "${event.errorText || ""}" ${event.url || ""}`);
   });
 
   peer.addEventListener("iceconnectionstatechange", () => {
-    diagIce.textContent = peer.iceConnectionState;
-    logDiag(`ICE connection: ${peer.iceConnectionState}`);
-    if (peer.iceConnectionState === "failed") {
-      logDiag("ICE FAILED — no working candidate pair. Likely symmetric NAT on one/both sides and no relay (TURN).");
-      setVerdict("No direct path found", "is-bad");
-    }
+    console.debug(`[ice] connection: ${peer.iceConnectionState}`);
   });
 
   peer.addEventListener("connectionstatechange", () => {
     setStatus(peer.connectionState);
-    logDiag(`Peer connection: ${peer.connectionState}`);
     if (peer.connectionState === "connected") {
       showNotice(role === "sender" ? "Select a file to send." : "Ready to receive.");
       reportSelectedPair();
     }
     if (peer.connectionState === "failed") {
-      setVerdict("Connection failed", "is-bad");
+      showNotice("Could not reach the other device. Try reconnecting both sides.");
     }
     updateSendState();
     renderUi();
@@ -265,17 +259,13 @@ async function handleSignal(event) {
   }
 
   if (message.type === "candidate") {
-    const remote = message.candidate;
-    if (remote) {
-      const info = describeCandidate(remote);
-      logDiag(
-        `remote candidate · ${info.type} · ${info.family} · ${info.protocol} · ${info.address}:${info.port}`
-      );
+    if (message.candidate) {
+      console.debug("[ice] remote", describeCandidate(message.candidate));
     }
     try {
-      await peer.addIceCandidate(remote);
+      await peer.addIceCandidate(message.candidate);
     } catch (error) {
-      logDiag(`addIceCandidate failed: ${error.message}`);
+      console.warn(`[ice] addIceCandidate failed: ${error.message}`);
     }
   }
 }
@@ -358,7 +348,7 @@ async function receiveChunk(event) {
     }
 
     if (message.type === "receiver-cancelled") {
-      receiverReadyReject?.(new Error("Receiver cancelled the save."));
+      receiverReadyReject?.(new Error("Receiver declined the file."));
       receiverReadyResolve = undefined;
       receiverReadyReject = undefined;
       return;
@@ -510,7 +500,8 @@ function disconnect() {
   peer = undefined;
   socket = undefined;
   isConnected = false;
-  setStatus("Not connected");
+  setStatus("Offline");
+  setPathChip(null);
   hideIncomingModal();
   showNotice("Connect to start a room.");
   updateSendState();
@@ -553,13 +544,18 @@ function renderUi() {
   for (const element of senderActions) {
     element.classList.toggle("hidden", role !== "sender");
   }
+
+  fileCard.classList.toggle("hidden", role !== "sender" || !selectedFile);
+  receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
 }
 
 function updateProgress(done, total) {
   const pct = total ? Math.floor((done / total) * 100) : 0;
   const seconds = startedAt ? Math.max((performance.now() - startedAt) / 1000, 0.001) : 1;
 
-  progressArea.classList.toggle("hidden", !total && !done);
+  transferActive = Boolean(total || done);
+  progressArea.classList.toggle("hidden", !transferActive);
+  receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
   progressBar.style.width = `${Math.min(pct, 100)}%`;
   progressText.textContent = `${pct}%`;
   speedText.textContent = `${formatBytes(done / seconds)}/s`;
@@ -567,90 +563,37 @@ function updateProgress(done, total) {
 }
 
 function setStatus(value) {
-  connectionState.textContent = value;
-  const badge = connectionState.closest(".status-badge");
-  if (badge) {
-    const normalized = String(value).toLowerCase();
-    let statusClass = "status-default";
-    if (normalized === "connected" || normalized === "ready") {
-      statusClass = "status-success";
-    } else if (normalized === "connecting" || normalized === "new") {
-      statusClass = "status-warning";
-    } else if (normalized === "failed" || normalized === "disconnected" || normalized === "closed") {
-      statusClass = "status-danger";
-    }
-    badge.classList.remove("status-success", "status-warning", "status-danger", "status-default");
-    badge.classList.add(statusClass);
+  const normalized = String(value).toLowerCase();
+  const labels = {
+    connected: "Connected",
+    ready: "Ready",
+    connecting: "Connecting",
+    new: "Connecting",
+    failed: "Failed",
+    disconnected: "Disconnected",
+    closed: "Closed",
+    offline: "Offline"
+  };
+  connectionState.textContent = labels[normalized] || value;
+
+  let state = "idle";
+  if (normalized === "connected" || normalized === "ready") {
+    state = "good";
+  } else if (normalized === "connecting" || normalized === "new") {
+    state = "warn";
+  } else if (normalized === "failed" || normalized === "disconnected" || normalized === "closed") {
+    state = "bad";
   }
+  statusPill.dataset.state = state;
 }
 
-function showNotice(message) {
-  noticeText.textContent = message;
-}
-
-function showIncomingModal() {
-  if (!receiveMeta) {
-    return;
+function setPathChip(kind) {
+  pathChip.classList.toggle("hidden", !kind);
+  pathChip.classList.remove("direct", "relay");
+  if (kind) {
+    pathChip.classList.add(kind);
+    pathChip.textContent = kind === "relay" ? "Relayed" : "Direct P2P";
   }
-
-  incomingDetails.textContent = `${receiveMeta.name} · ${formatBytes(receiveMeta.size)}`;
-  incomingModal.classList.remove("hidden");
-}
-
-function hideIncomingModal() {
-  incomingModal.classList.add("hidden");
-}
-
-function cancelIncomingFile() {
-  hideIncomingModal();
-  showNotice("Incoming file was cancelled.");
-  channel?.send(JSON.stringify({ type: "receiver-cancelled" }));
-  receiveMeta = undefined;
-  updateReceiverControls();
-}
-
-copyDiagButton.addEventListener("click", () => {
-  navigator.clipboard?.writeText(diagLog.textContent).then(
-    () => showNotice("Diagnostics copied to clipboard."),
-    () => showNotice("Copy failed — select the log text manually.")
-  );
-});
-
-clearDiagButton.addEventListener("click", resetDiagnostics);
-
-function logDiag(message) {
-  const stamp = `${(performance.now() / 1000).toFixed(2)}s`;
-  const line = `[${stamp}] ${role}: ${message}`;
-  if (diagLog.dataset.empty === "true") {
-    diagLog.textContent = "";
-    diagLog.dataset.empty = "false";
-  }
-  diagLog.textContent += `${line}\n`;
-  diagLog.scrollTop = diagLog.scrollHeight;
-  console.log("[diag]", line);
-}
-
-function resetDiagnostics() {
-  sawIpv6Local = false;
-  candidateCounts = { host: 0, srflx: 0, prflx: 0, relay: 0 };
-  diagLog.textContent = "Logs will appear here once you press Connect.";
-  diagLog.dataset.empty = "true";
-  diagIpv6.textContent = "—";
-  diagPath.textContent = "—";
-  diagIce.textContent = "—";
-  setVerdict("Connecting…", "");
-}
-
-function setVerdict(text, cls) {
-  diagVerdict.textContent = text;
-  diagVerdict.classList.remove("is-good", "is-bad", "is-warn");
-  if (cls) {
-    diagVerdict.classList.add(cls);
-  }
-}
-
-function isIpv6Address(address) {
-  return typeof address === "string" && address.includes(":") && !address.endsWith(".local");
 }
 
 function describeCandidate(candidate) {
@@ -674,35 +617,7 @@ function describeCandidate(candidate) {
     }
   }
 
-  return {
-    type: type || "?",
-    protocol: protocol || "?",
-    address: address || "?",
-    port: port || "?",
-    family: isIpv6Address(address) ? "IPv6" : "IPv4"
-  };
-}
-
-function logLocalCandidate(candidate) {
-  const info = describeCandidate(candidate);
-  if (candidateCounts[info.type] !== undefined) {
-    candidateCounts[info.type] += 1;
-  }
-
-  if (info.family === "IPv6") {
-    sawIpv6Local = true;
-    diagIpv6.textContent = "available";
-  } else if (diagIpv6.textContent === "—") {
-    diagIpv6.textContent = "IPv4 only (so far)";
-  }
-
-  logDiag(
-    `local candidate · ${info.type} · ${info.family} · ${info.protocol} · ${info.address}:${info.port}`
-  );
-}
-
-function summarizeCandidates(counts) {
-  return `host=${counts.host} srflx=${counts.srflx} relay=${counts.relay}`;
+  return `${type || "?"} ${protocol || "?"} ${address || "?"}:${port || "?"}`;
 }
 
 async function reportSelectedPair() {
@@ -734,7 +649,6 @@ async function reportSelectedPair() {
     }
 
     if (!pair) {
-      logDiag("Connected, but could not read the selected candidate pair from stats.");
       return;
     }
 
@@ -742,26 +656,38 @@ async function reportSelectedPair() {
     const remote = candidates.get(pair.remoteCandidateId);
     const localType = local?.candidateType || "?";
     const remoteType = remote?.candidateType || "?";
-    const family = isIpv6Address(local?.address || local?.ip) ? "IPv6" : "IPv4";
     const usedRelay = localType === "relay" || remoteType === "relay";
 
-    diagPath.textContent = `${localType}↔${remoteType} (${family})`;
-    logDiag(`SELECTED PAIR · local=${localType} remote=${remoteType} · ${family} · ${local?.protocol || "?"}`);
-
-    if (family === "IPv6") {
-      setVerdict("Connected over IPv6 (no NAT)", "is-good");
-      logDiag("Direct IPv6 connection — bypassed NAT entirely.");
-    } else if (usedRelay) {
-      setVerdict("Connected via relay (TURN)", "is-warn");
-    } else if (localType === "prflx" || remoteType === "prflx") {
-      setVerdict("Connected direct (peer-reflexive)", "is-good");
-      logDiag("Peer-reflexive worked — the cone↔symmetric port-learning trick succeeded.");
-    } else {
-      setVerdict("Connected direct (STUN)", "is-good");
-    }
+    console.debug(`[ice] selected pair local=${localType} remote=${remoteType}`);
+    setPathChip(usedRelay ? "relay" : "direct");
   } catch (error) {
-    logDiag(`Could not read stats: ${error.message}`);
+    console.warn(`[ice] could not read stats: ${error.message}`);
   }
+}
+
+function showNotice(message) {
+  noticeText.textContent = message;
+}
+
+function showIncomingModal() {
+  if (!receiveMeta) {
+    return;
+  }
+
+  incomingDetails.textContent = `${receiveMeta.name} · ${formatBytes(receiveMeta.size)}`;
+  incomingModal.classList.remove("hidden");
+}
+
+function hideIncomingModal() {
+  incomingModal.classList.add("hidden");
+}
+
+function cancelIncomingFile() {
+  hideIncomingModal();
+  showNotice("Incoming file was declined.");
+  channel?.send(JSON.stringify({ type: "receiver-cancelled" }));
+  receiveMeta = undefined;
+  updateReceiverControls();
 }
 
 function createRoomId() {
