@@ -72,6 +72,15 @@
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
               </svg>
             </button>
+            <button id="qrButton" class="icon-btn" type="button" aria-label="Show QR code to share this room" title="Share via QR">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <path d="M14 14h3v3h-3z" />
+                <path d="M21 14v2M21 20v1h-4M14 21v-1" />
+              </svg>
+            </button>
           </div>
           <p class="field-hint">Use the same code on both devices.</p>
 
@@ -171,6 +180,20 @@
         <div class="modal-actions">
           <button id="cancelIncomingButton" class="btn btn-ghost" type="button">Decline</button>
           <button id="modalSaveButton" class="btn btn-primary" type="button">Save file</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- QR share modal -->
+    <div class="modal-backdrop hidden" id="qrModal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="qrTitle">
+        <h2 id="qrTitle">Scan to join</h2>
+        <p class="modal-desc">The other device joins this room instantly.</p>
+        <div class="qr-box"><canvas id="qrCanvas"></canvas></div>
+        <p class="qr-link" id="qrLinkText"></p>
+        <div class="modal-actions">
+          <button id="copyLinkButton" class="btn btn-ghost" type="button">Copy link</button>
+          <button id="closeQrButton" class="btn btn-primary" type="button">Done</button>
         </div>
       </div>
     </div>

@@ -26,6 +26,12 @@ const progressText = document.querySelector("#progressText");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
 const senderActions = document.querySelectorAll(".sender-action");
+const qrButton = document.querySelector("#qrButton");
+const qrModal = document.querySelector("#qrModal");
+const qrCanvas = document.querySelector("#qrCanvas");
+const qrLinkText = document.querySelector("#qrLinkText");
+const copyLinkButton = document.querySelector("#copyLinkButton");
+const closeQrButton = document.querySelector("#closeQrButton");
 
 const chunkSize = 64 * 1024;
 const maxBufferedAmount = 1 * 1024 * 1024;
@@ -101,7 +107,72 @@ filePicker.addEventListener("drop", (event) => {
   handleFileSelected(event.dataTransfer?.files?.[0]);
 });
 
+qrButton.addEventListener("click", () => {
+  showQrModal().catch((error) => {
+    showNotice(error.message || "Could not generate QR code.");
+  });
+});
+closeQrButton.addEventListener("click", () => qrModal.classList.add("hidden"));
+qrModal.addEventListener("click", (event) => {
+  if (event.target === qrModal) {
+    qrModal.classList.add("hidden");
+  }
+});
+copyLinkButton.addEventListener("click", () => {
+  navigator.clipboard?.writeText(qrLinkText.textContent).then(
+    () => showNotice("Link copied to clipboard."),
+    () => showNotice("Copy failed — long-press the link to copy it.")
+  );
+});
+
 renderUi();
+joinFromLink();
+
+let qrLibPromise;
+
+function loadQrLib() {
+  qrLibPromise ??= import("https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm");
+  return qrLibPromise.then((mod) => mod.default ?? mod);
+}
+
+async function showQrModal() {
+  const roomId = roomInput.value.trim().toLowerCase();
+  if (!/^[a-z0-9-]{4,64}$/.test(roomId)) {
+    showNotice("Enter a valid room code first.");
+    return;
+  }
+
+  // Whoever scans should take the opposite role.
+  const otherRole = role === "sender" ? "receiver" : "sender";
+  const link = `${location.origin}/${roomId}?as=${otherRole}`;
+
+  qrLinkText.textContent = link;
+  qrModal.classList.remove("hidden");
+
+  const QRCode = await loadQrLib();
+  await QRCode.toCanvas(qrCanvas, link, {
+    width: 208,
+    margin: 1,
+    color: { dark: "#0d2b4a", light: "#ffffff" }
+  });
+}
+
+function joinFromLink() {
+  const linkCode = decodeURIComponent(location.pathname.slice(1)).toLowerCase();
+  if (!/^[a-z0-9-]{4,64}$/.test(linkCode)) {
+    return;
+  }
+
+  roomInput.value = linkCode;
+  const asRole = new URLSearchParams(location.search).get("as");
+  setRole(asRole === "sender" ? "sender" : "receiver");
+  showNotice("Joining room from link…");
+  connect().catch((error) => {
+    showNotice(error.message || "Could not join the room.");
+    connectButton.disabled = false;
+    renderUi();
+  });
+}
 
 function handleFileSelected(file) {
   if (!file) {

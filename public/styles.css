@@ -815,6 +815,31 @@ body {
   margin-top: 16px;
 }
 
+/* QR share */
+.qr-box {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  margin-top: 10px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px rgba(20, 80, 140, 0.08);
+}
+
+.qr-box canvas {
+  display: block;
+}
+
+.qr-link {
+  margin-top: 10px;
+  font-family: "Space Grotesk", monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
 }

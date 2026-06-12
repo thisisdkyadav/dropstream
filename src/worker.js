@@ -169,6 +169,12 @@ export default {
       return room.fetch(request);
     }
 
+    // Room deep links (e.g. from QR codes): /<code> serves the app shell;
+    // the client reads the code from the path and joins automatically.
+    if (/^\/[a-z0-9-]{4,64}$/.test(url.pathname)) {
+      return env.ASSETS.fetch(new Request(new URL("/", request.url), request));
+    }
+
     return env.ASSETS.fetch(request);
   }
 };
