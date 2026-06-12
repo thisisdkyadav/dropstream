@@ -455,13 +455,13 @@ body {
   gap: 18px;
   border-top: 1px solid var(--border);
   padding-top: 22px;
-  animation: panel-in 0.5s var(--ease) both;
+  animation: panel-in 0.4s var(--ease) 0.18s both;
 }
 
 @keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px);
   }
 }
 
@@ -975,44 +975,65 @@ body {
 
 /* Desktop — hero copy appears, two-column layout */
 @media (min-width: 960px) {
-  .hero {
-    display: block;
-    overflow: hidden;
-    transition: opacity 0.35s var(--ease), transform 0.5s var(--ease);
-  }
-
+  /* Flex + width transitions instead of animating grid fr units, which the
+     browser interpolates in janky steps. Width/opacity/transform are smooth. */
   .layout {
-    grid-template-columns: 1.05fr 0.95fr;
+    display: flex;
+    flex-direction: row;
     align-items: center;
-    gap: 64px;
+    justify-content: center;
+    gap: 56px;
     padding: 48px 24px 64px;
     min-height: calc(100dvh - 170px);
-    transition: grid-template-columns 0.6s var(--ease), gap 0.6s var(--ease);
+  }
+
+  .hero {
+    display: block;
+    flex: 0 0 auto;
+    width: 420px;
+    overflow: hidden;
+    transition: opacity 0.3s var(--ease), transform 0.5s var(--ease),
+                width 0.55s var(--ease), margin 0.55s var(--ease);
   }
 
   .card {
+    flex: 0 0 auto;
+    width: 440px;
+    max-width: 100%;
     padding: 32px;
-    max-width: 460px;
-    justify-self: center;
     margin: 0;
-    transition: max-width 0.6s var(--ease), padding 0.6s var(--ease);
+    display: grid;
+    grid-template-columns: 1fr;
+    transition: width 0.55s var(--ease), padding 0.55s var(--ease);
   }
 
-  /* Connected: collapse the hero column and let the card take the full row. */
-  .layout.connected {
-    grid-template-columns: 0fr 1fr;
-    gap: 0;
-  }
-
+  /* Connected: collapse the hero away and split the card into a session column
+     (room, lock, disconnect) and a send/receive column. */
   .layout.connected .hero {
     opacity: 0;
+    width: 0;
+    margin-right: -56px; /* swallow the flex gap */
     transform: translateX(-28px);
     pointer-events: none;
   }
 
   .layout.connected .card {
-    max-width: 680px;
-    padding: 34px 38px;
+    width: 860px;
+    padding: 34px;
+    grid-template-columns: 280px 1fr;
+    column-gap: 0;
+    align-items: start;
+  }
+
+  .layout.connected .setup {
+    border-right: 1px solid var(--border);
+    padding-right: 32px;
+  }
+
+  .layout.connected .transfer {
+    border-top: none;
+    padding-top: 2px;
+    padding-left: 32px;
   }
 }
 
