@@ -3,80 +3,199 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>P2P File Transfer</title>
+    <title>DropStream | Direct P2P File Transfer</title>
+    <meta name="description" content="Share files securely browser-to-browser with ultra-fast P2P WebRTC technology." />
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Stylesheets -->
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="app-bg-gradient"></div>
+    
     <main class="shell">
+      <!-- Minimal Header -->
       <section class="topbar">
-        <div>
-          <h1>P2P File Transfer</h1>
-          <p>Direct browser-to-browser transfer using WebRTC. The Worker only matches peers.</p>
+        <div class="brand-group">
+          <div class="logo-container">
+            <svg class="logo-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" />
+              <path d="M17 12l-5-5-5 5" />
+              <path d="M12 7v9" />
+            </svg>
+          </div>
+          <h1>DropStream</h1>
         </div>
-        <div class="status" id="connectionState">Not connected</div>
+        <div class="status-badge">
+          <span class="status-indicator"></span>
+          <span id="connectionState">Not connected</span>
+        </div>
       </section>
 
+      <!-- Workspace Setup -->
       <section class="workspace">
+        <!-- Controls (Left Sidebar) -->
         <div class="panel controls">
-          <label>
-            Room code
-            <div class="room-row">
-              <input id="roomInput" autocomplete="off" spellcheck="false" />
-              <button id="newRoomButton" type="button">New</button>
-            </div>
-          </label>
-
-          <div class="role-picker" role="group" aria-label="Device role">
-            <button class="active" id="senderRole" type="button">Send</button>
-            <button id="receiverRole" type="button">Receive</button>
+          <div class="panel-section">
+            <label for="roomInput" class="input-label">
+              Room Code
+              <div class="room-row">
+                <input id="roomInput" autocomplete="off" spellcheck="false" placeholder="Enter room code" />
+                <button id="newRoomButton" class="icon-button" type="button" aria-label="Generate new room code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                  </svg>
+                </button>
+              </div>
+            </label>
           </div>
 
-          <button class="primary" id="connectButton" type="button">Connect</button>
-          <button class="hidden" id="disconnectButton" type="button">Disconnect</button>
+          <div class="panel-section">
+            <div class="role-picker" role="group" aria-label="Device role">
+              <button class="active" id="senderRole" type="button">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                <span>Send</span>
+              </button>
+              <button id="receiverRole" type="button">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span>Receive</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="action-footer">
+            <button class="primary" id="connectButton" type="button">Connect</button>
+            <button class="danger hidden" id="disconnectButton" type="button">Disconnect</button>
+          </div>
         </div>
 
+        <!-- Transfer Console (Right Main) -->
         <div class="panel transfer hidden" id="transferPanel">
-          <div class="notice" id="noticeText">Waiting for the other device.</div>
+          <!-- Notice Alert Box -->
+          <div class="notice-box">
+            <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            <div class="notice-text-wrapper">
+              <span id="noticeText" class="notice">Waiting for the other device.</span>
+            </div>
+          </div>
 
-          <label class="file-picker sender-action" id="filePicker">
-            <span>Choose file</span>
+          <!-- File Picker Zone (Sender Only) -->
+          <label class="file-picker sender-action" id="filePicker" for="fileInput">
+            <div class="picker-inner">
+              <div class="upload-icon-circle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </div>
+              <span class="picker-primary-text">Select File</span>
+            </div>
             <input id="fileInput" type="file" />
           </label>
 
+          <!-- Selected File Card (Sender Only) -->
           <div class="file-card sender-action" id="fileCard">
-            <div>
-              <strong id="fileName">No file selected</strong>
-              <span id="fileSize"></span>
+            <div class="file-card-details">
+              <div class="file-icon-square">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+              </div>
+              <div class="file-metadata">
+                <strong id="fileName">No file selected</strong>
+                <span id="fileSize"></span>
+              </div>
             </div>
-            <button class="primary" id="sendButton" type="button" disabled>Send file</button>
+            <button class="primary send-btn" id="sendButton" type="button" disabled>
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+              Send file
+            </button>
           </div>
 
+          <!-- Progress and Transfer Stats -->
           <div class="progress-area hidden" id="progressArea">
+            <div class="progress-info-row">
+              <span class="progress-lbl">Progress</span>
+              <span id="progressText" class="progress-val">0%</span>
+            </div>
+            
             <div class="meter" aria-label="Transfer progress">
               <div id="progressBar"></div>
             </div>
 
-            <div class="stats">
-              <span id="progressText">0%</span>
-              <span id="speedText">0 MB/s</span>
-              <span id="receivedText">0 B</span>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">Speed</span>
+                <span id="speedText" class="stat-value">0 MB/s</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Transferred</span>
+                <span id="receivedText" class="stat-value">0 B</span>
+              </div>
             </div>
           </div>
         </div>
       </section>
+
+      <!-- Connection Diagnostics -->
+      <section class="panel diag-panel" id="diagPanel">
+        <div class="diag-header">
+          <div class="diag-title-group">
+            <span class="diag-title">Connection diagnostics</span>
+            <span class="diag-verdict" id="diagVerdict">Not connected</span>
+          </div>
+          <div class="diag-actions">
+            <button id="copyDiagButton" class="diag-btn" type="button">Copy</button>
+            <button id="clearDiagButton" class="diag-btn" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="diag-summary" id="diagSummary">
+          <div class="diag-chip"><span class="diag-chip-label">IPv6</span><span class="diag-chip-value" id="diagIpv6">—</span></div>
+          <div class="diag-chip"><span class="diag-chip-label">Path</span><span class="diag-chip-value" id="diagPath">—</span></div>
+          <div class="diag-chip"><span class="diag-chip-label">ICE</span><span class="diag-chip-value" id="diagIce">—</span></div>
+        </div>
+        <pre class="diag-log" id="diagLog">Logs will appear here once you press Connect.</pre>
+      </section>
     </main>
 
+    <!-- Modal Dialog (Incoming File) -->
     <div class="modal-backdrop hidden" id="incomingModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="incomingTitle">
+        <div class="modal-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </div>
         <h2 id="incomingTitle">Incoming file</h2>
-        <p id="incomingDetails"></p>
+        <p id="incomingDetails" class="modal-desc"></p>
         <div class="modal-actions">
-          <button id="cancelIncomingButton" type="button">Cancel</button>
-          <button class="primary" id="modalSaveButton" type="button">Save</button>
+          <button id="cancelIncomingButton" class="btn-cancel" type="button">Cancel</button>
+          <button class="primary btn-save" id="modalSaveButton" type="button">Save File</button>
         </div>
       </div>
     </div>
 
+    <!-- Script Loading -->
     <script src="/app.js" type="module"></script>
   </body>
 </html>

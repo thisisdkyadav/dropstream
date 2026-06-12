@@ -86,9 +86,76 @@ export class Room {
   }
 }
 
+// Preferred path: fetch ready-to-use iceServers from a private Metered project
+// using its API key (kept server-side). Falls back to the public Open Relay HMAC
+// path if the key is missing or the request fails.
+async function turnIceServers(env) {
+  if (env.METERED_API_KEY && env.METERED_APP) {
+    try {
+      const url = `https://${env.METERED_APP}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(env.METERED_API_KEY)}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const servers = await response.json();
+        if (Array.isArray(servers) && servers.length > 0) {
+          // Prepend a public STUN server for extra redundancy.
+          return [{ urls: "stun:stun.l.google.com:19302" }, ...servers];
+        }
+      }
+    } catch {
+      // Fall through to the public Open Relay fallback.
+    }
+  }
+
+  return openRelayIceServers(env);
+}
+
+// TURN REST credentials (coturn "use-auth-secret" scheme): the username is an
+// expiry timestamp and the credential is base64(HMAC-SHA1(secret, username)).
+// Defaults target Metered's free Open Relay; override TURN_SECRET / TURN_HOST
+// in wrangler vars to point at a private TURN server later.
+async function openRelayIceServers(env) {
+  const secret = env.TURN_SECRET || "openrelayprojectsecret";
+  const host = env.TURN_HOST || "staticauth.openrelay.metered.ca";
+  const ttlSeconds = 12 * 60 * 60;
+
+  const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const username = String(expiry);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(username));
+  const credential = btoa(String.fromCharCode(...new Uint8Array(signature)));
+
+  return [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: `stun:${host}:80` },
+    {
+      urls: [
+        `turn:${host}:80`,
+        `turn:${host}:443`,
+        `turn:${host}:443?transport=tcp`,
+        `turns:${host}:443?transport=tcp`
+      ],
+      username,
+      credential
+    }
+  ];
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/turn") {
+      const iceServers = await turnIceServers(env);
+      return Response.json({ iceServers }, {
+        headers: { "Cache-Control": "no-store" }
+      });
+    }
 
     if (url.pathname.startsWith("/api/room/")) {
       const roomId = url.pathname.split("/").filter(Boolean).at(-1);

@@ -21,6 +21,13 @@ const progressText = document.querySelector("#progressText");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
 const senderActions = document.querySelectorAll(".sender-action");
+const diagLog = document.querySelector("#diagLog");
+const diagVerdict = document.querySelector("#diagVerdict");
+const diagIpv6 = document.querySelector("#diagIpv6");
+const diagPath = document.querySelector("#diagPath");
+const diagIce = document.querySelector("#diagIce");
+const copyDiagButton = document.querySelector("#copyDiagButton");
+const clearDiagButton = document.querySelector("#clearDiagButton");
 
 const chunkSize = 64 * 1024;
 const maxBufferedAmount = 1 * 1024 * 1024;
@@ -39,6 +46,9 @@ let startedAt = 0;
 let receiverReadyResolve;
 let receiverReadyReject;
 let isConnected = false;
+let sawIpv6Local = false;
+let candidateCounts = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 roomInput.value = createRoomId();
 
@@ -48,7 +58,13 @@ newRoomButton.addEventListener("click", () => {
 
 senderRole.addEventListener("click", () => setRole("sender"));
 receiverRole.addEventListener("click", () => setRole("receiver"));
-connectButton.addEventListener("click", connect);
+connectButton.addEventListener("click", () => {
+  connect().catch((error) => {
+    showNotice(error.message || "Connect failed.");
+    connectButton.disabled = false;
+    renderUi();
+  });
+});
 disconnectButton.addEventListener("click", disconnect);
 sendButton.addEventListener("click", () => {
   sendFile().catch((error) => {
@@ -89,7 +105,7 @@ function setRole(nextRole) {
   renderUi();
 }
 
-function connect() {
+async function connect() {
   disconnect();
   resetTransfer();
 
@@ -98,6 +114,11 @@ function connect() {
     showNotice("Room code must be 4-64 letters, numbers, or dashes.");
     return;
   }
+
+  connectButton.disabled = true;
+  renderUi();
+  resetDiagnostics();
+  await loadIceServers();
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/api/room/${roomId}?role=${role}`);
@@ -123,21 +144,79 @@ function connect() {
   renderUi();
 }
 
+async function loadIceServers() {
+  try {
+    const response = await fetch("/api/turn");
+    if (!response.ok) {
+      throw new Error(`status ${response.status}`);
+    }
+    const data = await response.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      iceServers = data.iceServers;
+      const hasTurn = iceServers.some((server) =>
+        [].concat(server.urls).some((url) => String(url).startsWith("turn"))
+      );
+      logDiag(`Loaded ${iceServers.length} ICE servers${hasTurn ? " (TURN relay enabled)" : " (STUN only)"}.`);
+      return;
+    }
+    throw new Error("empty config");
+  } catch (error) {
+    iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+    logDiag(`TURN config unavailable (${error.message}); falling back to STUN only.`);
+  }
+}
+
 function createPeer() {
-  peer = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
+  peer = new RTCPeerConnection({ iceServers });
 
   peer.addEventListener("icecandidate", (event) => {
     if (event.candidate) {
+      logLocalCandidate(event.candidate);
       signal({ type: "candidate", candidate: event.candidate });
+    } else {
+      logDiag(`Gathering complete: ${summarizeCandidates(candidateCounts)}`);
+      if (!sawIpv6Local) {
+        logDiag("No IPv6 candidate gathered on this device — IPv6 path unavailable here.");
+      }
+      const turnConfigured = iceServers.some((server) =>
+        [].concat(server.urls).some((url) => String(url).startsWith("turn"))
+      );
+      if (turnConfigured && candidateCounts.relay === 0) {
+        logDiag("⚠ TURN was configured but produced NO relay candidate — allocation failed (see ICE server error above: 401=bad creds, 701=unreachable).");
+        setVerdict("TURN allocation failed", "is-bad");
+      }
+    }
+  });
+
+  peer.addEventListener("icecandidateerror", (event) => {
+    // 401 = TURN credentials rejected, 403 = forbidden, 701 = server unreachable.
+    logDiag(
+      `ICE server error · code=${event.errorCode} · "${event.errorText || ""}" · ${event.url || ""}`
+    );
+  });
+
+  peer.addEventListener("icegatheringstatechange", () => {
+    logDiag(`ICE gathering: ${peer.iceGatheringState}`);
+  });
+
+  peer.addEventListener("iceconnectionstatechange", () => {
+    diagIce.textContent = peer.iceConnectionState;
+    logDiag(`ICE connection: ${peer.iceConnectionState}`);
+    if (peer.iceConnectionState === "failed") {
+      logDiag("ICE FAILED — no working candidate pair. Likely symmetric NAT on one/both sides and no relay (TURN).");
+      setVerdict("No direct path found", "is-bad");
     }
   });
 
   peer.addEventListener("connectionstatechange", () => {
     setStatus(peer.connectionState);
+    logDiag(`Peer connection: ${peer.connectionState}`);
     if (peer.connectionState === "connected") {
       showNotice(role === "sender" ? "Select a file to send." : "Ready to receive.");
+      reportSelectedPair();
+    }
+    if (peer.connectionState === "failed") {
+      setVerdict("Connection failed", "is-bad");
     }
     updateSendState();
     renderUi();
@@ -186,7 +265,18 @@ async function handleSignal(event) {
   }
 
   if (message.type === "candidate") {
-    await peer.addIceCandidate(message.candidate);
+    const remote = message.candidate;
+    if (remote) {
+      const info = describeCandidate(remote);
+      logDiag(
+        `remote candidate · ${info.type} · ${info.family} · ${info.protocol} · ${info.address}:${info.port}`
+      );
+    }
+    try {
+      await peer.addIceCandidate(remote);
+    } catch (error) {
+      logDiag(`addIceCandidate failed: ${error.message}`);
+    }
   }
 }
 
@@ -478,6 +568,20 @@ function updateProgress(done, total) {
 
 function setStatus(value) {
   connectionState.textContent = value;
+  const badge = connectionState.closest(".status-badge");
+  if (badge) {
+    const normalized = String(value).toLowerCase();
+    let statusClass = "status-default";
+    if (normalized === "connected" || normalized === "ready") {
+      statusClass = "status-success";
+    } else if (normalized === "connecting" || normalized === "new") {
+      statusClass = "status-warning";
+    } else if (normalized === "failed" || normalized === "disconnected" || normalized === "closed") {
+      statusClass = "status-danger";
+    }
+    badge.classList.remove("status-success", "status-warning", "status-danger", "status-default");
+    badge.classList.add(statusClass);
+  }
 }
 
 function showNotice(message) {
@@ -503,6 +607,161 @@ function cancelIncomingFile() {
   channel?.send(JSON.stringify({ type: "receiver-cancelled" }));
   receiveMeta = undefined;
   updateReceiverControls();
+}
+
+copyDiagButton.addEventListener("click", () => {
+  navigator.clipboard?.writeText(diagLog.textContent).then(
+    () => showNotice("Diagnostics copied to clipboard."),
+    () => showNotice("Copy failed — select the log text manually.")
+  );
+});
+
+clearDiagButton.addEventListener("click", resetDiagnostics);
+
+function logDiag(message) {
+  const stamp = `${(performance.now() / 1000).toFixed(2)}s`;
+  const line = `[${stamp}] ${role}: ${message}`;
+  if (diagLog.dataset.empty === "true") {
+    diagLog.textContent = "";
+    diagLog.dataset.empty = "false";
+  }
+  diagLog.textContent += `${line}\n`;
+  diagLog.scrollTop = diagLog.scrollHeight;
+  console.log("[diag]", line);
+}
+
+function resetDiagnostics() {
+  sawIpv6Local = false;
+  candidateCounts = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+  diagLog.textContent = "Logs will appear here once you press Connect.";
+  diagLog.dataset.empty = "true";
+  diagIpv6.textContent = "—";
+  diagPath.textContent = "—";
+  diagIce.textContent = "—";
+  setVerdict("Connecting…", "");
+}
+
+function setVerdict(text, cls) {
+  diagVerdict.textContent = text;
+  diagVerdict.classList.remove("is-good", "is-bad", "is-warn");
+  if (cls) {
+    diagVerdict.classList.add(cls);
+  }
+}
+
+function isIpv6Address(address) {
+  return typeof address === "string" && address.includes(":") && !address.endsWith(".local");
+}
+
+function describeCandidate(candidate) {
+  // A live RTCIceCandidate exposes parsed fields, but one received over
+  // signaling is JSON and only carries the raw SDP string — so parse that.
+  let type = candidate.type;
+  let protocol = candidate.protocol;
+  let address = candidate.address;
+  let port = candidate.port;
+
+  if ((!type || !address) && typeof candidate.candidate === "string") {
+    const parts = candidate.candidate.split(" ");
+    if (parts.length >= 6) {
+      protocol = protocol || parts[2];
+      address = address || parts[4];
+      port = port || parts[5];
+      const typIndex = parts.indexOf("typ");
+      if (typIndex !== -1) {
+        type = type || parts[typIndex + 1];
+      }
+    }
+  }
+
+  return {
+    type: type || "?",
+    protocol: protocol || "?",
+    address: address || "?",
+    port: port || "?",
+    family: isIpv6Address(address) ? "IPv6" : "IPv4"
+  };
+}
+
+function logLocalCandidate(candidate) {
+  const info = describeCandidate(candidate);
+  if (candidateCounts[info.type] !== undefined) {
+    candidateCounts[info.type] += 1;
+  }
+
+  if (info.family === "IPv6") {
+    sawIpv6Local = true;
+    diagIpv6.textContent = "available";
+  } else if (diagIpv6.textContent === "—") {
+    diagIpv6.textContent = "IPv4 only (so far)";
+  }
+
+  logDiag(
+    `local candidate · ${info.type} · ${info.family} · ${info.protocol} · ${info.address}:${info.port}`
+  );
+}
+
+function summarizeCandidates(counts) {
+  return `host=${counts.host} srflx=${counts.srflx} relay=${counts.relay}`;
+}
+
+async function reportSelectedPair() {
+  try {
+    const stats = await peer.getStats();
+    let selectedPairId;
+    const pairs = new Map();
+    const candidates = new Map();
+
+    stats.forEach((report) => {
+      if (report.type === "transport" && report.selectedCandidatePairId) {
+        selectedPairId = report.selectedCandidatePairId;
+      }
+      if (report.type === "candidate-pair") {
+        pairs.set(report.id, report);
+      }
+      if (report.type === "local-candidate" || report.type === "remote-candidate") {
+        candidates.set(report.id, report);
+      }
+    });
+
+    let pair = selectedPairId ? pairs.get(selectedPairId) : undefined;
+    if (!pair) {
+      pairs.forEach((candidatePair) => {
+        if (candidatePair.nominated && candidatePair.state === "succeeded") {
+          pair = candidatePair;
+        }
+      });
+    }
+
+    if (!pair) {
+      logDiag("Connected, but could not read the selected candidate pair from stats.");
+      return;
+    }
+
+    const local = candidates.get(pair.localCandidateId);
+    const remote = candidates.get(pair.remoteCandidateId);
+    const localType = local?.candidateType || "?";
+    const remoteType = remote?.candidateType || "?";
+    const family = isIpv6Address(local?.address || local?.ip) ? "IPv6" : "IPv4";
+    const usedRelay = localType === "relay" || remoteType === "relay";
+
+    diagPath.textContent = `${localType}↔${remoteType} (${family})`;
+    logDiag(`SELECTED PAIR · local=${localType} remote=${remoteType} · ${family} · ${local?.protocol || "?"}`);
+
+    if (family === "IPv6") {
+      setVerdict("Connected over IPv6 (no NAT)", "is-good");
+      logDiag("Direct IPv6 connection — bypassed NAT entirely.");
+    } else if (usedRelay) {
+      setVerdict("Connected via relay (TURN)", "is-warn");
+    } else if (localType === "prflx" || remoteType === "prflx") {
+      setVerdict("Connected direct (peer-reflexive)", "is-good");
+      logDiag("Peer-reflexive worked — the cone↔symmetric port-learning trick succeeded.");
+    } else {
+      setVerdict("Connected direct (STUN)", "is-good");
+    }
+  } catch (error) {
+    logDiag(`Could not read stats: ${error.message}`);
+  }
 }
 
 function createRoomId() {
