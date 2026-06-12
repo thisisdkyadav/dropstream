@@ -91,17 +91,6 @@
 
           <input id="passInput" class="pass-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Passphrase (optional)" />
 
-          <div class="segmented" role="group" aria-label="Device role">
-            <button class="seg-btn active" id="senderRole" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              Send
-            </button>
-            <button class="seg-btn" id="receiverRole" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Receive
-            </button>
-          </div>
-
           <button class="btn btn-primary btn-block" id="connectButton" type="button">Connect</button>
           <button class="btn btn-danger btn-block hidden" id="disconnectButton" type="button">Disconnect</button>
         </div>
@@ -114,7 +103,7 @@
             <span class="path-chip hidden" id="pathChip"></span>
           </div>
 
-          <label class="dropzone sender-action" id="filePicker" for="fileInput">
+          <label class="dropzone" id="filePicker" for="fileInput">
             <div class="dropzone-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -128,7 +117,7 @@
             <input id="folderInput" type="file" webkitdirectory hidden />
           </label>
 
-          <div class="file-card sender-action hidden" id="fileCard">
+          <div class="file-card hidden" id="fileCard">
             <div class="file-card-head">
               <div class="file-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -151,7 +140,7 @@
             </button>
           </div>
 
-          <div class="text-send sender-action">
+          <div class="text-send">
             <label class="field-label" for="textInput">Or send text / a link</label>
             <div class="text-send-row">
               <textarea id="textInput" rows="2" placeholder="Paste a message or link…"></textarea>
@@ -168,11 +157,6 @@
               </div>
             </div>
             <p class="incoming-text-content" id="incomingTextContent"></p>
-          </div>
-
-          <div class="receive-wait receiver-action hidden" id="receiveWait">
-            <div class="pulse-ring" aria-hidden="true"><span></span><span></span></div>
-            <p>Listening for incoming files…</p>
           </div>
 
           <div class="progress hidden" id="progressArea">

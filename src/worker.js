@@ -10,42 +10,48 @@ export class Room {
       return new Response("Expected WebSocket", { status: 426 });
     }
 
-    const url = new URL(request.url);
-    const role = url.searchParams.get("role") === "receiver" ? "receiver" : "sender";
-
-    if (this.peers.has(role)) {
-      return new Response("Role already connected", { status: 409 });
+    // Roles are connection-level only: the first peer ("a") is the WebRTC
+    // initiator (creates the offer), the second ("b") answers. Both peers can
+    // send and receive over the data channel, so there is no user-facing role.
+    let slot;
+    if (!this.peers.has("a")) {
+      slot = "a";
+    } else if (!this.peers.has("b")) {
+      slot = "b";
+    } else {
+      return new Response("Room is full", { status: 409 });
     }
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
     server.accept();
-    this.peers.set(role, server);
+    this.peers.set(slot, server);
 
     this.send(server, {
       type: "ready",
-      role,
+      slot,
+      initiator: slot === "a",
       peerConnected: this.peers.size === 2
     });
 
     this.broadcast({
       type: "presence",
-      peers: [...this.peers.keys()]
+      count: this.peers.size
     });
 
     server.addEventListener("message", (event) => {
-      this.forward(role, event.data);
+      this.forward(slot, event.data);
     });
 
     const close = () => {
-      if (this.peers.get(role) === server) {
-        this.peers.delete(role);
+      if (this.peers.get(slot) === server) {
+        this.peers.delete(slot);
       }
 
       this.broadcast({
         type: "presence",
-        peers: [...this.peers.keys()]
+        count: this.peers.size
       });
     };
 
@@ -55,19 +61,19 @@ export class Room {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  forward(fromRole, raw) {
-    const toRole = fromRole === "sender" ? "receiver" : "sender";
-    const peer = this.peers.get(toRole);
-
-    if (!peer) {
+  forward(fromSlot, raw) {
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch {
       return;
     }
 
-    try {
-      const message = JSON.parse(raw);
-      this.send(peer, { ...message, from: fromRole });
-    } catch {
-      this.send(peer, { type: "error", message: "Invalid signaling payload" });
+    // Relay to the other peer (only two slots exist).
+    for (const [slot, peer] of this.peers) {
+      if (slot !== fromSlot) {
+        this.send(peer, { ...message, from: fromSlot });
+      }
     }
   }
 

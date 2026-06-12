@@ -4,8 +4,6 @@ const roomInput = document.querySelector("#roomInput");
 const newRoomButton = document.querySelector("#newRoomButton");
 const connectButton = document.querySelector("#connectButton");
 const disconnectButton = document.querySelector("#disconnectButton");
-const senderRole = document.querySelector("#senderRole");
-const receiverRole = document.querySelector("#receiverRole");
 const passInput = document.querySelector("#passInput");
 const passModal = document.querySelector("#passModal");
 const passModalMsg = document.querySelector("#passModalMsg");
@@ -33,7 +31,6 @@ const statusPill = document.querySelector("#statusPill");
 const transferPanel = document.querySelector("#transferPanel");
 const noticeText = document.querySelector("#noticeText");
 const pathChip = document.querySelector("#pathChip");
-const receiveWait = document.querySelector("#receiveWait");
 const incomingModal = document.querySelector("#incomingModal");
 const incomingTitle = document.querySelector("#incomingTitle");
 const incomingDetails = document.querySelector("#incomingDetails");
@@ -45,7 +42,6 @@ const progressText = document.querySelector("#progressText");
 const progressSub = document.querySelector("#progressSub");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
-const senderActions = document.querySelectorAll(".sender-action");
 const qrButton = document.querySelector("#qrButton");
 const qrModal = document.querySelector("#qrModal");
 const qrCanvas = document.querySelector("#qrCanvas");
@@ -56,7 +52,7 @@ const closeQrButton = document.querySelector("#closeQrButton");
 const chunkSize = 64 * 1024;
 const maxBufferedAmount = 1 * 1024 * 1024;
 
-let role = "sender";
+let isInitiator = false;
 let socket;
 let peer;
 let channel;
@@ -100,8 +96,6 @@ newRoomButton.addEventListener("click", () => {
   roomInput.value = createRoomId();
 });
 
-senderRole.addEventListener("click", () => setRole("sender"));
-receiverRole.addEventListener("click", () => setRole("receiver"));
 connectButton.addEventListener("click", () => {
   connect().catch((error) => {
     showNotice(error.message || "Connect failed.");
@@ -114,6 +108,8 @@ sendButton.addEventListener("click", () => {
   sendAll().catch((error) => {
     showNotice(error.message || "Send failed.");
     releaseWakeLock();
+    transferActive = false;
+    setProgressSub("");
     updateSendState();
   });
 });
@@ -257,7 +253,7 @@ function startAuth() {
   peerAuthProof = null;
   authorized = false;
   sendControl({ type: "auth", proof: myAuthProof });
-  showNotice(passphrase ? "Verifying passphrase…" : (role === "sender" ? "Choose files or send text." : "Ready to receive."));
+  showNotice(passphrase ? "Verifying passphrase…" : "Connected — send files or text, or wait to receive.");
   evaluateAuth();
 }
 
@@ -270,7 +266,7 @@ function evaluateAuth() {
     authorized = true;
     passModal.classList.add("hidden");
     if (passphrase) {
-      showNotice(role === "sender" ? "Room secured 🔒 — choose files or send text." : "Room secured 🔒 — ready to receive.");
+      showNotice("Room secured 🔒 — send or receive.");
     }
     updateSendState();
     updateReceiverControls();
@@ -328,9 +324,7 @@ async function showQrModal() {
     return;
   }
 
-  // Whoever scans should take the opposite role.
-  const otherRole = role === "sender" ? "receiver" : "sender";
-  const link = `${location.origin}/${roomId}?as=${otherRole}`;
+  const link = `${location.origin}/${roomId}`;
 
   qrLinkText.textContent = link;
   qrModal.classList.remove("hidden");
@@ -350,8 +344,6 @@ function joinFromLink() {
   }
 
   roomInput.value = linkCode;
-  const asRole = new URLSearchParams(location.search).get("as");
-  setRole(asRole === "sender" ? "sender" : "receiver");
   showNotice("Joining room from link…");
   connect().catch((error) => {
     showNotice(error.message || "Could not join the room.");
@@ -420,18 +412,7 @@ function renderFileSelection() {
   renderUi();
 }
 
-/* ---------- Roles & connection ---------- */
-
-function setRole(nextRole) {
-  role = nextRole;
-  senderRole.classList.toggle("active", role === "sender");
-  receiverRole.classList.toggle("active", role === "receiver");
-  fileInput.disabled = role !== "sender";
-  showNotice(role === "sender" ? "Connect, then choose files." : "Connect and wait for incoming files.");
-  updateSendState();
-  updateReceiverControls();
-  renderUi();
-}
+/* ---------- Connection ---------- */
 
 async function connect() {
   teardown();
@@ -465,7 +446,7 @@ async function openSocket() {
   }
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/api/room/${currentRoomId}?role=${role}`);
+  socket = new WebSocket(`${protocol}//${location.host}/api/room/${currentRoomId}`);
 
   socket.addEventListener("open", () => {
     if (token !== socketToken) {
@@ -476,9 +457,10 @@ async function openSocket() {
     clearTimeout(reconnectTimer);
     peerWasConnected = false;
     setStatus("Connecting");
-    showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
+    showNotice("Waiting for the other device…");
     renderUi();
-    createPeer();
+    // The peer is created once the room assigns our slot (the "ready" message),
+    // since that tells us whether we are the WebRTC initiator.
   });
   socket.addEventListener("message", (event) => {
     if (token === socketToken) {
@@ -616,7 +598,7 @@ function createPeer() {
     setStatus(peer.connectionState);
     if (peer.connectionState === "connected") {
       peerWasConnected = true;
-      showNotice(role === "sender" ? "Choose files or send text." : "Ready to receive.");
+      showNotice("Connected — send files or text, or wait to receive.");
       reportSelectedPair();
     }
     if (peer.connectionState === "failed" && intentConnected) {
@@ -633,7 +615,7 @@ function createPeer() {
     setupChannel(event.channel);
   });
 
-  if (role === "sender") {
+  if (isInitiator) {
     setupChannel(peer.createDataChannel("file", { ordered: true }));
   }
 }
@@ -641,9 +623,15 @@ function createPeer() {
 async function handleSignal(event) {
   const message = JSON.parse(event.data);
 
+  if (message.type === "ready") {
+    // The room assigned our slot; "a" is the WebRTC initiator.
+    isInitiator = Boolean(message.initiator);
+    createPeer();
+    return;
+  }
+
   if (message.type === "presence") {
-    const otherRole = role === "sender" ? "receiver" : "sender";
-    const otherPresent = message.peers.includes(otherRole);
+    const otherPresent = message.count === 2;
 
     if (!otherPresent) {
       // If we were connected and the other side dropped, rebuild a fresh peer
@@ -652,12 +640,12 @@ async function handleSignal(event) {
         showNotice("The other device dropped — waiting for it to return…");
         recreatePeer();
       } else {
-        showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
+        showNotice("Waiting for the other device…");
       }
       return;
     }
 
-    if (role === "sender" && peer && !peer.localDescription) {
+    if (isInitiator && peer && !peer.localDescription) {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       signal({ type: "offer", description: peer.localDescription });
@@ -731,6 +719,10 @@ async function sendAll() {
     showNotice("Unlock the room with the passphrase before sending.");
     return;
   }
+  if (transferActive || incomingBatch) {
+    showNotice("Wait for the current transfer to finish.");
+    return;
+  }
 
   const files = selectedFiles;
   const total = files.reduce((sum, file) => sum + file.size, 0);
@@ -783,6 +775,7 @@ async function sendAll() {
   transferActive = false;
   setProgressSub("");
   showNotice(`Sent ${files.length} file${files.length > 1 ? "s" : ""}.`);
+  updateSendState();
 }
 
 function sendText() {
@@ -930,6 +923,7 @@ async function handleControl(message) {
 
     incomingBatch = undefined;
     updateReceiverControls();
+    updateSendState();
   }
 }
 
@@ -959,6 +953,7 @@ async function prepareIncomingSave() {
   transferActive = true;
   channel.send(JSON.stringify({ type: "ready" }));
   hideIncomingModal();
+  updateSendState();
   showNotice("Receiving files…");
 }
 
@@ -1133,13 +1128,16 @@ function resetProgress() {
 /* ---------- UI state ---------- */
 
 function updateSendState() {
-  const open = channel?.readyState === "open";
-  sendButton.disabled = role !== "sender" || selectedFiles.length === 0 || !open;
-  sendTextButton.disabled = role !== "sender" || !open || textInput.value.trim().length === 0;
+  // Either peer can send, but only one transfer at a time (the progress UI and
+  // receive buffers are shared), so block sending while a transfer is active or
+  // an incoming batch is awaiting acceptance.
+  const ready = channel?.readyState === "open" && authorized && !transferActive && !incomingBatch;
+  sendButton.disabled = !ready || selectedFiles.length === 0;
+  sendTextButton.disabled = !ready || textInput.value.trim().length === 0;
 }
 
 function updateReceiverControls() {
-  modalSaveButton.disabled = role !== "receiver" || !incomingBatch || channel?.readyState !== "open";
+  modalSaveButton.disabled = !incomingBatch || channel?.readyState !== "open" || !authorized;
 }
 
 function renderUi() {
@@ -1152,15 +1150,8 @@ function renderUi() {
   newRoomButton.disabled = live;
   roomInput.disabled = live;
   passInput.disabled = live;
-  senderRole.disabled = live;
-  receiverRole.disabled = live;
 
-  for (const element of senderActions) {
-    element.classList.toggle("hidden", role !== "sender");
-  }
-
-  fileCard.classList.toggle("hidden", role !== "sender" || selectedFiles.length === 0);
-  receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
+  fileCard.classList.toggle("hidden", selectedFiles.length === 0);
 }
 
 function updateProgress(done, total) {
@@ -1169,7 +1160,6 @@ function updateProgress(done, total) {
 
   transferActive = transferActive || Boolean(total || done);
   progressArea.classList.toggle("hidden", !transferActive);
-  receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
   progressBar.style.width = `${Math.min(pct, 100)}%`;
   progressText.textContent = `${pct}%`;
   speedText.textContent = `${formatBytes(done / seconds)}/s`;
@@ -1315,6 +1305,7 @@ function cancelIncomingFile() {
   channel?.send(JSON.stringify({ type: "declined" }));
   incomingBatch = undefined;
   updateReceiverControls();
+  updateSendState();
 }
 
 function createRoomId() {
