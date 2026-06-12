@@ -1,4 +1,4 @@
-import { Sha256 } from "./sha256.js";
+import { Sha256, sha256Hex } from "./sha256.js";
 
 const roomInput = document.querySelector("#roomInput");
 const newRoomButton = document.querySelector("#newRoomButton");
@@ -6,6 +6,12 @@ const connectButton = document.querySelector("#connectButton");
 const disconnectButton = document.querySelector("#disconnectButton");
 const senderRole = document.querySelector("#senderRole");
 const receiverRole = document.querySelector("#receiverRole");
+const passInput = document.querySelector("#passInput");
+const passModal = document.querySelector("#passModal");
+const passModalMsg = document.querySelector("#passModalMsg");
+const passModalInput = document.querySelector("#passModalInput");
+const passSubmitButton = document.querySelector("#passSubmitButton");
+const passCancelButton = document.querySelector("#passCancelButton");
 const fileInput = document.querySelector("#fileInput");
 const folderInput = document.querySelector("#folderInput");
 const folderButton = document.querySelector("#folderButton");
@@ -59,6 +65,11 @@ let isConnected = false;
 let transferActive = false;
 let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let wakeLock = null;
+let currentRoomId = "";
+let passphrase = "";
+let authorized = false;
+let myAuthProof = "";
+let peerAuthProof = null;
 
 // Receiver-side batch state.
 let incomingBatch;
@@ -171,6 +182,17 @@ copyLinkButton.addEventListener("click", () => {
   );
 });
 
+passSubmitButton.addEventListener("click", submitPassphrase);
+passCancelButton.addEventListener("click", () => {
+  passModal.classList.add("hidden");
+  showNotice("Enter the passphrase to unlock this room.");
+});
+passModalInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    submitPassphrase();
+  }
+});
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && transferActive && !wakeLock) {
     acquireWakeLock();
@@ -209,6 +231,79 @@ function releaseWakeLock() {
     /* ignore */
   }
   wakeLock = null;
+}
+
+/* ---------- Passphrase authorization ---------- */
+
+function resetAuth() {
+  authorized = false;
+  myAuthProof = "";
+  peerAuthProof = null;
+  passModal.classList.add("hidden");
+}
+
+function computeProof() {
+  return passphrase ? sha256Hex(`${currentRoomId} ${passphrase}`) : "";
+}
+
+function startAuth() {
+  myAuthProof = computeProof();
+  peerAuthProof = null;
+  authorized = false;
+  sendControl({ type: "auth", proof: myAuthProof });
+  showNotice(passphrase ? "Verifying passphrase…" : (role === "sender" ? "Choose files or send text." : "Ready to receive."));
+  evaluateAuth();
+}
+
+function evaluateAuth() {
+  if (peerAuthProof === null) {
+    return; // Peer hasn't presented its proof yet.
+  }
+
+  if (myAuthProof === peerAuthProof) {
+    authorized = true;
+    passModal.classList.add("hidden");
+    if (passphrase) {
+      showNotice(role === "sender" ? "Room secured 🔒 — choose files or send text." : "Room secured 🔒 — ready to receive.");
+    }
+    updateSendState();
+    updateReceiverControls();
+    return;
+  }
+
+  authorized = false;
+  updateSendState();
+  updateReceiverControls();
+
+  if (myAuthProof === "") {
+    showPassModal("This room is locked. Enter the passphrase to continue.");
+  } else if (peerAuthProof === "") {
+    showNotice("Waiting for the other device to enter the passphrase…");
+  } else {
+    showPassModal("Passphrase doesn't match. Try again.");
+  }
+}
+
+function showPassModal(message) {
+  passModalMsg.textContent = message;
+  passModalInput.value = "";
+  passModal.classList.remove("hidden");
+  passModalInput.focus();
+}
+
+function submitPassphrase() {
+  const entered = passModalInput.value.trim();
+  if (!entered) {
+    return;
+  }
+  passphrase = entered;
+  passModal.classList.add("hidden");
+  if (channel?.readyState === "open") {
+    myAuthProof = computeProof();
+    sendControl({ type: "auth", proof: myAuthProof });
+    showNotice("Verifying passphrase…");
+    evaluateAuth();
+  }
 }
 
 /* ---------- QR + deep link ---------- */
@@ -341,6 +436,10 @@ async function connect() {
     showNotice("Room code must be 4-64 letters, numbers, or dashes.");
     return;
   }
+
+  currentRoomId = roomId;
+  passphrase = passInput.value.trim();
+  resetAuth();
 
   connectButton.disabled = true;
   renderUi();
@@ -482,7 +581,7 @@ function setupChannel(nextChannel) {
 
   channel.addEventListener("open", () => {
     setStatus("Ready");
-    showNotice(role === "sender" ? "Choose files or send text." : "Ready to receive.");
+    startAuth();
     updateSendState();
     updateReceiverControls();
     renderUi();
@@ -507,6 +606,10 @@ function setupChannel(nextChannel) {
 
 async function sendAll() {
   if (selectedFiles.length === 0 || !channel || channel.readyState !== "open") {
+    return;
+  }
+  if (!authorized) {
+    showNotice("Unlock the room with the passphrase before sending.");
     return;
   }
 
@@ -568,6 +671,10 @@ function sendText() {
   if (!content || !channel || channel.readyState !== "open") {
     return;
   }
+  if (!authorized) {
+    showNotice("Unlock the room with the passphrase before sending.");
+    return;
+  }
 
   channel.send(JSON.stringify({ type: "text", content }));
   textInput.value = "";
@@ -598,6 +705,12 @@ async function receiveData(event) {
 }
 
 async function handleControl(message) {
+  if (message.type === "auth") {
+    peerAuthProof = message.proof ?? "";
+    evaluateAuth();
+    return;
+  }
+
   if (message.type === "text") {
     showIncomingText(message.content);
     showNotice("Received a text message.");
@@ -703,6 +816,10 @@ async function handleControl(message) {
 
 async function prepareIncomingSave() {
   if (!incomingBatch || !channel || channel.readyState !== "open") {
+    return;
+  }
+  if (!authorized) {
+    showNotice("Unlock the room with the passphrase first.");
     return;
   }
 
@@ -857,6 +974,7 @@ function disconnect() {
   socket = undefined;
   isConnected = false;
   releaseWakeLock();
+  resetAuth();
   setStatus("Offline");
   setPathChip(null);
   hideIncomingModal();
@@ -913,6 +1031,7 @@ function renderUi() {
   connectButton.classList.toggle("hidden", isConnected);
   newRoomButton.disabled = isConnected;
   roomInput.disabled = isConnected;
+  passInput.disabled = isConnected;
   senderRole.disabled = isConnected;
   receiverRole.disabled = isConnected;
 

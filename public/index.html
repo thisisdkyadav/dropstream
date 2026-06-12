@@ -89,6 +89,8 @@
           </div>
           <p class="field-hint">Use the same code on both devices.</p>
 
+          <input id="passInput" class="pass-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Passphrase (optional)" />
+
           <div class="segmented" role="group" aria-label="Device role">
             <button class="seg-btn active" id="senderRole" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
@@ -212,6 +214,25 @@
         <div class="modal-actions">
           <button id="cancelIncomingButton" class="btn btn-ghost" type="button">Decline</button>
           <button id="modalSaveButton" class="btn btn-primary" type="button">Save file</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Passphrase unlock modal -->
+    <div class="modal-backdrop hidden" id="passModal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="passTitle">
+        <div class="modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+        <h2 id="passTitle">Locked room</h2>
+        <p id="passModalMsg" class="modal-desc">Enter the passphrase to continue.</p>
+        <input id="passModalInput" class="pass-input" type="password" autocomplete="off" placeholder="Passphrase" />
+        <div class="modal-actions">
+          <button id="passCancelButton" class="btn btn-ghost" type="button">Cancel</button>
+          <button id="passSubmitButton" class="btn btn-primary" type="button">Unlock</button>
         </div>
       </div>
     </div>

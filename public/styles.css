@@ -355,6 +355,33 @@ body {
   margin-top: -6px;
 }
 
+.pass-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.92rem;
+  color: var(--text);
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 13px 15px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.pass-input::placeholder {
+  color: var(--text-faint);
+}
+
+.pass-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(30, 143, 242, 0.18);
+}
+
+.pass-input:disabled {
+  opacity: 0.6;
+  background: var(--bg);
+}
+
 /* Segmented control */
 .segmented {
   display: grid;
