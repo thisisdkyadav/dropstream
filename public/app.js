@@ -1,3 +1,5 @@
+import { Sha256 } from "./sha256.js";
+
 const roomInput = document.querySelector("#roomInput");
 const newRoomButton = document.querySelector("#newRoomButton");
 const connectButton = document.querySelector("#connectButton");
@@ -65,6 +67,8 @@ let batchReceived = 0;
 let currentMeta;
 let currentWriter;
 let currentBuffers = [];
+let currentHasher;
+let batchResults = [];
 let dirHandle;
 let singleHandle;
 let usedNames = new Set();
@@ -539,15 +543,17 @@ async function sendAll() {
     });
     setProgressSub(`File ${index + 1} of ${files.length} · ${file.name}`);
 
+    const hasher = new Sha256();
     for (let offset = 0; offset < file.size; offset += chunkSize) {
       const chunk = await file.slice(offset, offset + chunkSize).arrayBuffer();
+      hasher.update(chunk);
       await sendBinary(chunk);
       sent += chunk.byteLength;
       updateProgress(sent, total);
     }
 
     await waitForBuffer(0);
-    sendControl({ type: "file-end", index });
+    sendControl({ type: "file-end", index, sha256: hasher.digestHex() });
   }
 
   sendControl({ type: "batch-done" });
@@ -578,6 +584,8 @@ async function receiveData(event) {
     return;
   }
 
+  currentHasher?.update(event.data);
+
   if (currentWriter) {
     writeChain = writeChain.then(() => currentWriter.write(event.data));
     await writeChain;
@@ -600,6 +608,7 @@ async function handleControl(message) {
     incomingBatch = message;
     batchTotal = message.totalBytes || 0;
     batchReceived = 0;
+    batchResults = [];
     usedNames = new Set();
     dirHandle = undefined;
     singleHandle = undefined;
@@ -631,6 +640,7 @@ async function handleControl(message) {
     currentMeta = message;
     setProgressSub(`File ${message.index + 1} of ${incomingBatch?.files?.length || 1} · ${message.name}`);
     currentBuffers = [];
+    currentHasher = new Sha256();
 
     if (dirHandle) {
       const name = uniqueName(message.name);
@@ -645,6 +655,16 @@ async function handleControl(message) {
   }
 
   if (message.type === "file-end") {
+    const actual = currentHasher ? currentHasher.digestHex() : "";
+    currentHasher = undefined;
+    const expected = message.sha256 || "";
+    const verified = Boolean(expected);
+    const ok = !verified || actual === expected;
+    batchResults.push({ name: currentMeta?.name || "file", verified, ok });
+    if (verified && !ok) {
+      console.warn(`[integrity] ${currentMeta?.name}: expected ${expected}, got ${actual}`);
+    }
+
     if (currentWriter) {
       await writeChain;
       await currentWriter.close();
@@ -665,7 +685,17 @@ async function handleControl(message) {
     releaseWakeLock();
     transferActive = false;
     setProgressSub("");
-    showNotice(`Received ${count} file${count !== 1 ? "s" : ""}.`);
+
+    const failed = batchResults.filter((result) => !result.ok);
+    const verifiedCount = batchResults.filter((result) => result.verified && result.ok).length;
+    if (failed.length > 0) {
+      showNotice(`⚠ ${failed.length} of ${count} file${count !== 1 ? "s" : ""} failed the integrity check.`);
+    } else if (verifiedCount === count && count > 0) {
+      showNotice(`Received ${count} file${count !== 1 ? "s" : ""} — verified ✓`);
+    } else {
+      showNotice(`Received ${count} file${count !== 1 ? "s" : ""}.`);
+    }
+
     incomingBatch = undefined;
     updateReceiverControls();
   }
@@ -843,6 +873,8 @@ function resetTransfer() {
   currentMeta = undefined;
   currentWriter = undefined;
   currentBuffers = [];
+  currentHasher = undefined;
+  batchResults = [];
   dirHandle = undefined;
   singleHandle = undefined;
   usedNames = new Set();

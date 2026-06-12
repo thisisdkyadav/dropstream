@@ -2,10 +2,11 @@
 // installable PWA. It deliberately never touches /api/* (TURN credentials and
 // the signaling WebSocket must always hit the network) or non-GET requests.
 
-const CACHE = "dropstream-v1";
+const CACHE = "dropstream-v2";
 const SHELL = [
   "/",
   "/app.js",
+  "/sha256.js",
   "/styles.css",
   "/manifest.webmanifest",
   "/icon.svg"
