@@ -42,6 +42,8 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   line-height: 1.5;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -173,11 +175,14 @@ body {
 .layout {
   position: relative;
   z-index: 1;
+  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 20px 20px 56px;
+  flex: 1 1 auto;
+  padding: 20px 20px 40px;
   display: grid;
   grid-template-columns: 1fr;
+  align-content: center;
   gap: 40px;
 }
 
@@ -983,8 +988,7 @@ body {
     align-items: center;
     justify-content: center;
     gap: 56px;
-    padding: 48px 24px 64px;
-    min-height: calc(100dvh - 170px);
+    padding: 32px 24px;
   }
 
   .hero {
