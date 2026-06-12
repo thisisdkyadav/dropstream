@@ -42,6 +42,7 @@ const progressText = document.querySelector("#progressText");
 const progressSub = document.querySelector("#progressSub");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
+const layout = document.querySelector(".layout");
 const qrButton = document.querySelector("#qrButton");
 const qrModal = document.querySelector("#qrModal");
 const qrCanvas = document.querySelector("#qrCanvas");
@@ -1144,6 +1145,7 @@ function renderUi() {
   // Treat an in-progress reconnect (intentConnected, not yet isConnected) as
   // "live" so the Disconnect control stays available to cancel it.
   const live = intentConnected;
+  layout.classList.toggle("connected", live);
   transferPanel.classList.toggle("hidden", !live);
   disconnectButton.classList.toggle("hidden", !live);
   connectButton.classList.toggle("hidden", live);
