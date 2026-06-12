@@ -5,11 +5,21 @@ const disconnectButton = document.querySelector("#disconnectButton");
 const senderRole = document.querySelector("#senderRole");
 const receiverRole = document.querySelector("#receiverRole");
 const fileInput = document.querySelector("#fileInput");
+const folderInput = document.querySelector("#folderInput");
+const folderButton = document.querySelector("#folderButton");
 const filePicker = document.querySelector("#filePicker");
 const fileCard = document.querySelector("#fileCard");
+const fileCardTitle = document.querySelector("#fileCardTitle");
+const fileCardSub = document.querySelector("#fileCardSub");
+const fileList = document.querySelector("#fileList");
+const clearFilesButton = document.querySelector("#clearFilesButton");
 const sendButton = document.querySelector("#sendButton");
-const fileName = document.querySelector("#fileName");
-const fileSize = document.querySelector("#fileSize");
+const textInput = document.querySelector("#textInput");
+const sendTextButton = document.querySelector("#sendTextButton");
+const incomingTextCard = document.querySelector("#incomingTextCard");
+const incomingTextContent = document.querySelector("#incomingTextContent");
+const copyTextButton = document.querySelector("#copyTextButton");
+const openTextButton = document.querySelector("#openTextButton");
 const connectionState = document.querySelector("#connectionState");
 const statusPill = document.querySelector("#statusPill");
 const transferPanel = document.querySelector("#transferPanel");
@@ -17,12 +27,14 @@ const noticeText = document.querySelector("#noticeText");
 const pathChip = document.querySelector("#pathChip");
 const receiveWait = document.querySelector("#receiveWait");
 const incomingModal = document.querySelector("#incomingModal");
+const incomingTitle = document.querySelector("#incomingTitle");
 const incomingDetails = document.querySelector("#incomingDetails");
 const modalSaveButton = document.querySelector("#modalSaveButton");
 const cancelIncomingButton = document.querySelector("#cancelIncomingButton");
 const progressArea = document.querySelector("#progressArea");
 const progressBar = document.querySelector("#progressBar");
 const progressText = document.querySelector("#progressText");
+const progressSub = document.querySelector("#progressSub");
 const speedText = document.querySelector("#speedText");
 const receivedText = document.querySelector("#receivedText");
 const senderActions = document.querySelectorAll(".sender-action");
@@ -40,18 +52,26 @@ let role = "sender";
 let socket;
 let peer;
 let channel;
-let selectedFile;
-let receiveMeta;
-let receivedBuffers = [];
-let receivedBytes = 0;
-let fileWriter;
+let selectedFiles = [];
+let isConnected = false;
+let transferActive = false;
+let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+let wakeLock = null;
+
+// Receiver-side batch state.
+let incomingBatch;
+let batchTotal = 0;
+let batchReceived = 0;
+let currentMeta;
+let currentWriter;
+let currentBuffers = [];
+let dirHandle;
+let singleHandle;
+let usedNames = new Set();
 let writeChain = Promise.resolve();
 let startedAt = 0;
 let receiverReadyResolve;
 let receiverReadyReject;
-let isConnected = false;
-let transferActive = false;
-let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 
 roomInput.value = createRoomId();
 
@@ -70,15 +90,25 @@ connectButton.addEventListener("click", () => {
 });
 disconnectButton.addEventListener("click", disconnect);
 sendButton.addEventListener("click", () => {
-  sendFile().catch((error) => {
+  sendAll().catch((error) => {
     showNotice(error.message || "Send failed.");
+    releaseWakeLock();
     updateSendState();
   });
+});
+clearFilesButton.addEventListener("click", () => setSelectedFiles([]));
+sendTextButton.addEventListener("click", sendText);
+textInput.addEventListener("input", updateSendState);
+copyTextButton.addEventListener("click", () => {
+  navigator.clipboard?.writeText(incomingTextContent.textContent).then(
+    () => showNotice("Copied to clipboard."),
+    () => showNotice("Copy failed — select the text manually.")
+  );
 });
 modalSaveButton.addEventListener("click", () => {
   prepareIncomingSave().catch((error) => {
     showNotice(error.message || "Save setup failed.");
-    channel?.send(JSON.stringify({ type: "receiver-cancelled" }));
+    channel?.send(JSON.stringify({ type: "declined" }));
     modalSaveButton.disabled = false;
     hideIncomingModal();
   });
@@ -86,7 +116,19 @@ modalSaveButton.addEventListener("click", () => {
 cancelIncomingButton.addEventListener("click", cancelIncomingFile);
 
 fileInput.addEventListener("change", () => {
-  handleFileSelected(fileInput.files?.[0]);
+  addFiles(fileInput.files);
+  fileInput.value = "";
+});
+folderButton.addEventListener("click", (event) => {
+  // The button lives inside the dropzone <label>, so block the label from also
+  // opening the file picker.
+  event.preventDefault();
+  event.stopPropagation();
+  folderInput.click();
+});
+folderInput.addEventListener("change", () => {
+  addFiles(folderInput.files);
+  folderInput.value = "";
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -104,7 +146,7 @@ for (const eventName of ["dragleave", "drop"]) {
 }
 
 filePicker.addEventListener("drop", (event) => {
-  handleFileSelected(event.dataTransfer?.files?.[0]);
+  addFiles(event.dataTransfer?.files);
 });
 
 qrButton.addEventListener("click", () => {
@@ -125,8 +167,47 @@ copyLinkButton.addEventListener("click", () => {
   );
 });
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && transferActive && !wakeLock) {
+    acquireWakeLock();
+  }
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 renderUi();
 joinFromLink();
+
+/* ---------- Wake lock ---------- */
+
+async function acquireWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    return;
+  }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener?.("release", () => {
+      wakeLock = null;
+    });
+  } catch {
+    wakeLock = null;
+  }
+}
+
+function releaseWakeLock() {
+  try {
+    wakeLock?.release?.();
+  } catch {
+    /* ignore */
+  }
+  wakeLock = null;
+}
+
+/* ---------- QR + deep link ---------- */
 
 let qrLibPromise;
 
@@ -174,25 +255,74 @@ function joinFromLink() {
   });
 }
 
-function handleFileSelected(file) {
-  if (!file) {
+/* ---------- File selection ---------- */
+
+function addFiles(fileListLike) {
+  const incoming = Array.from(fileListLike || []);
+  if (incoming.length === 0) {
     return;
   }
 
-  selectedFile = file;
-  fileName.textContent = file.name;
-  fileSize.textContent = formatBytes(file.size);
-  showNotice("Ready to send when the receiver is connected.");
+  const seen = new Set(selectedFiles.map((file) => `${file.name}:${file.size}`));
+  for (const file of incoming) {
+    const key = `${file.name}:${file.size}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      selectedFiles.push(file);
+    }
+  }
+
+  renderFileSelection();
+}
+
+function setSelectedFiles(files) {
+  selectedFiles = files;
+  renderFileSelection();
+}
+
+function renderFileSelection() {
+  const count = selectedFiles.length;
+  const total = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+
+  if (count === 1) {
+    fileCardTitle.textContent = selectedFiles[0].name;
+    fileCardSub.textContent = formatBytes(total);
+  } else if (count > 1) {
+    fileCardTitle.textContent = `${count} files`;
+    fileCardSub.textContent = formatBytes(total);
+  }
+
+  fileList.innerHTML = "";
+  if (count > 1) {
+    for (const file of selectedFiles) {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "file-list-name";
+      name.textContent = file.name;
+      const size = document.createElement("span");
+      size.className = "file-list-size";
+      size.textContent = formatBytes(file.size);
+      li.append(name, size);
+      fileList.append(li);
+    }
+  }
+  fileList.classList.toggle("hidden", count <= 1);
+
+  if (count > 0) {
+    showNotice(`${count} file${count > 1 ? "s" : ""} ready to send.`);
+  }
   updateSendState();
   renderUi();
 }
+
+/* ---------- Roles & connection ---------- */
 
 function setRole(nextRole) {
   role = nextRole;
   senderRole.classList.toggle("active", role === "sender");
   receiverRole.classList.toggle("active", role === "receiver");
   fileInput.disabled = role !== "sender";
-  showNotice(role === "sender" ? "Connect, then choose a file." : "Connect and wait for an incoming file.");
+  showNotice(role === "sender" ? "Connect, then choose files." : "Connect and wait for incoming files.");
   updateSendState();
   updateReceiverControls();
   renderUi();
@@ -217,7 +347,7 @@ async function connect() {
   socket.addEventListener("open", () => {
     isConnected = true;
     setStatus("Connecting");
-    showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for incoming file.");
+    showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
     renderUi();
     createPeer();
   });
@@ -277,7 +407,7 @@ function createPeer() {
   peer.addEventListener("connectionstatechange", () => {
     setStatus(peer.connectionState);
     if (peer.connectionState === "connected") {
-      showNotice(role === "sender" ? "Select a file to send." : "Ready to receive.");
+      showNotice(role === "sender" ? "Choose files or send text." : "Ready to receive.");
       reportSelectedPair();
     }
     if (peer.connectionState === "failed") {
@@ -348,7 +478,7 @@ function setupChannel(nextChannel) {
 
   channel.addEventListener("open", () => {
     setStatus("Ready");
-    showNotice(role === "sender" ? "Select a file to send." : "Ready to receive.");
+    showNotice(role === "sender" ? "Choose files or send text." : "Ready to receive.");
     updateSendState();
     updateReceiverControls();
     renderUi();
@@ -356,111 +486,214 @@ function setupChannel(nextChannel) {
 
   channel.addEventListener("close", () => {
     showNotice("Peer connection closed.");
+    releaseWakeLock();
     updateSendState();
     updateReceiverControls();
     renderUi();
   });
 
   channel.addEventListener("message", (event) => {
-    receiveChunk(event).catch((error) => {
+    receiveData(event).catch((error) => {
       showNotice(error.message || "Receive failed.");
     });
   });
 }
 
-async function sendFile() {
-  if (!selectedFile || !channel || channel.readyState !== "open") {
+/* ---------- Sending ---------- */
+
+async function sendAll() {
+  if (selectedFiles.length === 0 || !channel || channel.readyState !== "open") {
     return;
   }
 
-  resetTransfer();
+  const files = selectedFiles;
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+
+  await acquireWakeLock();
+  resetProgress();
   startedAt = performance.now();
-  showNotice(`Sending ${selectedFile.name}.`);
+  transferActive = true;
+
   sendControl({
-    type: "meta",
-    name: selectedFile.name,
-    size: selectedFile.size,
-    mime: selectedFile.type || "application/octet-stream"
+    type: "batch",
+    totalBytes: total,
+    files: files.map((file) => ({
+      name: file.name,
+      size: file.size,
+      mime: file.type || "application/octet-stream"
+    }))
   });
+
+  showNotice(`Waiting for the receiver to accept ${files.length} file${files.length > 1 ? "s" : ""}…`);
   await waitForReceiverReady();
 
-  for (let offset = 0; offset < selectedFile.size; offset += chunkSize) {
-    const chunk = await selectedFile.slice(offset, offset + chunkSize).arrayBuffer();
-    await sendBinary(chunk);
-    updateProgress(Math.min(offset + chunk.byteLength, selectedFile.size), selectedFile.size);
+  let sent = 0;
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    sendControl({
+      type: "file-start",
+      index,
+      name: file.name,
+      size: file.size,
+      mime: file.type || "application/octet-stream"
+    });
+    setProgressSub(`File ${index + 1} of ${files.length} · ${file.name}`);
+
+    for (let offset = 0; offset < file.size; offset += chunkSize) {
+      const chunk = await file.slice(offset, offset + chunkSize).arrayBuffer();
+      await sendBinary(chunk);
+      sent += chunk.byteLength;
+      updateProgress(sent, total);
+    }
+
+    await waitForBuffer(0);
+    sendControl({ type: "file-end", index });
   }
 
-  await waitForBuffer(0);
-  sendControl({ type: "done" });
-  showNotice("Send complete.");
+  sendControl({ type: "batch-done" });
+  releaseWakeLock();
+  transferActive = false;
+  setProgressSub("");
+  showNotice(`Sent ${files.length} file${files.length > 1 ? "s" : ""}.`);
 }
 
-async function receiveChunk(event) {
-  if (typeof event.data === "string") {
-    const message = JSON.parse(event.data);
-
-    if (message.type === "meta") {
-      receiveMeta = message;
-      receivedBuffers = [];
-      receivedBytes = 0;
-      fileWriter = undefined;
-      writeChain = Promise.resolve();
-      startedAt = performance.now();
-      updateProgress(0, message.size);
-      updateReceiverControls();
-      showIncomingModal();
-      showNotice("Incoming file is ready to save.");
-    }
-
-    if (message.type === "ready-to-receive") {
-      receiverReadyResolve?.();
-      receiverReadyResolve = undefined;
-      receiverReadyReject = undefined;
-    }
-
-    if (message.type === "receiver-cancelled") {
-      receiverReadyReject?.(new Error("Receiver declined the file."));
-      receiverReadyResolve = undefined;
-      receiverReadyReject = undefined;
-      return;
-    }
-
-    if (message.type === "done") {
-      if (fileWriter) {
-        await writeChain;
-        await fileWriter.close();
-        fileWriter = undefined;
-      } else {
-        const blob = new Blob(receivedBuffers, {
-          type: receiveMeta?.mime || "application/octet-stream"
-        });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = receiveMeta?.name || "download";
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      }
-
-      hideIncomingModal();
-      showNotice("Download complete.");
-      receiveMeta = undefined;
-      receivedBuffers = [];
-      updateReceiverControls();
-    }
-
+function sendText() {
+  const content = textInput.value.trim();
+  if (!content || !channel || channel.readyState !== "open") {
     return;
   }
 
-  if (fileWriter) {
-    writeChain = writeChain.then(() => fileWriter.write(event.data));
-    await writeChain;
-  } else {
-    receivedBuffers.push(event.data);
+  channel.send(JSON.stringify({ type: "text", content }));
+  textInput.value = "";
+  updateSendState();
+  showNotice("Text sent.");
+}
+
+/* ---------- Receiving ---------- */
+
+async function receiveData(event) {
+  if (typeof event.data === "string") {
+    const message = JSON.parse(event.data);
+    await handleControl(message);
+    return;
   }
 
-  receivedBytes += event.data.byteLength;
-  updateProgress(receivedBytes, receiveMeta?.size || receivedBytes);
+  if (currentWriter) {
+    writeChain = writeChain.then(() => currentWriter.write(event.data));
+    await writeChain;
+  } else {
+    currentBuffers.push(event.data);
+  }
+
+  batchReceived += event.data.byteLength;
+  updateProgress(batchReceived, batchTotal);
+}
+
+async function handleControl(message) {
+  if (message.type === "text") {
+    showIncomingText(message.content);
+    showNotice("Received a text message.");
+    return;
+  }
+
+  if (message.type === "batch") {
+    incomingBatch = message;
+    batchTotal = message.totalBytes || 0;
+    batchReceived = 0;
+    usedNames = new Set();
+    dirHandle = undefined;
+    singleHandle = undefined;
+    currentWriter = undefined;
+    currentBuffers = [];
+    writeChain = Promise.resolve();
+    startedAt = performance.now();
+    resetProgress();
+    showIncomingModal();
+    showNotice("Incoming files are ready to accept.");
+    return;
+  }
+
+  if (message.type === "ready") {
+    receiverReadyResolve?.();
+    receiverReadyResolve = undefined;
+    receiverReadyReject = undefined;
+    return;
+  }
+
+  if (message.type === "declined") {
+    receiverReadyReject?.(new Error("Receiver declined the transfer."));
+    receiverReadyResolve = undefined;
+    receiverReadyReject = undefined;
+    return;
+  }
+
+  if (message.type === "file-start") {
+    currentMeta = message;
+    setProgressSub(`File ${message.index + 1} of ${incomingBatch?.files?.length || 1} · ${message.name}`);
+    currentBuffers = [];
+
+    if (dirHandle) {
+      const name = uniqueName(message.name);
+      const handle = await dirHandle.getFileHandle(name, { create: true });
+      currentWriter = await handle.createWritable();
+    } else if (singleHandle) {
+      currentWriter = await singleHandle.createWritable();
+    } else {
+      currentWriter = undefined;
+    }
+    return;
+  }
+
+  if (message.type === "file-end") {
+    if (currentWriter) {
+      await writeChain;
+      await currentWriter.close();
+      currentWriter = undefined;
+    } else {
+      const blob = new Blob(currentBuffers, {
+        type: currentMeta?.mime || "application/octet-stream"
+      });
+      downloadBlob(blob, currentMeta?.name || "download");
+      currentBuffers = [];
+    }
+    return;
+  }
+
+  if (message.type === "batch-done") {
+    const count = incomingBatch?.files?.length || 0;
+    hideIncomingModal();
+    releaseWakeLock();
+    transferActive = false;
+    setProgressSub("");
+    showNotice(`Received ${count} file${count !== 1 ? "s" : ""}.`);
+    incomingBatch = undefined;
+    updateReceiverControls();
+  }
+}
+
+async function prepareIncomingSave() {
+  if (!incomingBatch || !channel || channel.readyState !== "open") {
+    return;
+  }
+
+  modalSaveButton.disabled = true;
+  const count = incomingBatch.files.length;
+
+  if (count > 1 && "showDirectoryPicker" in window) {
+    dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+  } else if (count === 1 && "showSaveFilePicker" in window) {
+    singleHandle = await window.showSaveFilePicker({
+      suggestedName: incomingBatch.files[0].name
+    });
+  } else {
+    showNotice("Files will download once each one finishes.");
+  }
+
+  await acquireWakeLock();
+  transferActive = true;
+  channel.send(JSON.stringify({ type: "ready" }));
+  hideIncomingModal();
+  showNotice("Receiving files…");
 }
 
 function waitForReceiverReady() {
@@ -468,7 +701,7 @@ function waitForReceiverReady() {
     const timer = setTimeout(() => {
       receiverReadyResolve = undefined;
       receiverReadyReject = undefined;
-      reject(new Error("Receiver did not become ready in time."));
+      reject(new Error("Receiver did not respond in time."));
     }, 120000);
 
     receiverReadyResolve = () => {
@@ -482,26 +715,48 @@ function waitForReceiverReady() {
   });
 }
 
-async function prepareIncomingSave() {
-  if (!receiveMeta || !channel || channel.readyState !== "open") {
-    return;
+function uniqueName(rawName) {
+  const base = String(rawName).split(/[\\/]/).pop() || "file";
+  if (!usedNames.has(base)) {
+    usedNames.add(base);
+    return base;
   }
 
-  modalSaveButton.disabled = true;
-
-  if ("showSaveFilePicker" in window) {
-    const handle = await window.showSaveFilePicker({
-      suggestedName: receiveMeta.name
-    });
-    fileWriter = await handle.createWritable();
-  } else {
-    showNotice("This browser will save after the full file is received.");
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  let counter = 1;
+  let candidate = `${stem} (${counter})${ext}`;
+  while (usedNames.has(candidate)) {
+    counter += 1;
+    candidate = `${stem} (${counter})${ext}`;
   }
-
-  channel.send(JSON.stringify({ type: "ready-to-receive" }));
-  hideIncomingModal();
-  showNotice("Receiving file.");
+  usedNames.add(candidate);
+  return candidate;
 }
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showIncomingText(content) {
+  incomingTextContent.textContent = content;
+  const isLink = /^https?:\/\/\S+$/i.test(content.trim());
+  if (isLink) {
+    openTextButton.href = content.trim();
+    openTextButton.classList.remove("hidden");
+  } else {
+    openTextButton.classList.add("hidden");
+  }
+  incomingTextCard.classList.remove("hidden");
+}
+
+/* ---------- Channel plumbing ---------- */
 
 function sendControl(message) {
   channel.send(JSON.stringify(message));
@@ -571,6 +826,7 @@ function disconnect() {
   peer = undefined;
   socket = undefined;
   isConnected = false;
+  releaseWakeLock();
   setStatus("Offline");
   setPathChip(null);
   hideIncomingModal();
@@ -581,26 +837,42 @@ function disconnect() {
 }
 
 function resetTransfer() {
-  receivedBuffers = [];
-  receivedBytes = 0;
-  receiveMeta = undefined;
-  fileWriter = undefined;
+  incomingBatch = undefined;
+  batchTotal = 0;
+  batchReceived = 0;
+  currentMeta = undefined;
+  currentWriter = undefined;
+  currentBuffers = [];
+  dirHandle = undefined;
+  singleHandle = undefined;
+  usedNames = new Set();
   writeChain = Promise.resolve();
   receiverReadyResolve = undefined;
   receiverReadyReject = undefined;
   startedAt = 0;
-  updateProgress(0, 0);
+  transferActive = false;
+  incomingTextCard.classList.add("hidden");
+  resetProgress();
   updateReceiverControls();
   hideIncomingModal();
 }
 
+function resetProgress() {
+  transferActive = false;
+  setProgressSub("");
+  updateProgress(0, 0);
+}
+
+/* ---------- UI state ---------- */
+
 function updateSendState() {
-  sendButton.disabled = role !== "sender" || !selectedFile || channel?.readyState !== "open";
+  const open = channel?.readyState === "open";
+  sendButton.disabled = role !== "sender" || selectedFiles.length === 0 || !open;
+  sendTextButton.disabled = role !== "sender" || !open || textInput.value.trim().length === 0;
 }
 
 function updateReceiverControls() {
-  modalSaveButton.disabled =
-    role !== "receiver" || !receiveMeta || !!fileWriter || channel?.readyState !== "open";
+  modalSaveButton.disabled = role !== "receiver" || !incomingBatch || channel?.readyState !== "open";
 }
 
 function renderUi() {
@@ -616,7 +888,7 @@ function renderUi() {
     element.classList.toggle("hidden", role !== "sender");
   }
 
-  fileCard.classList.toggle("hidden", role !== "sender" || !selectedFile);
+  fileCard.classList.toggle("hidden", role !== "sender" || selectedFiles.length === 0);
   receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
 }
 
@@ -624,13 +896,18 @@ function updateProgress(done, total) {
   const pct = total ? Math.floor((done / total) * 100) : 0;
   const seconds = startedAt ? Math.max((performance.now() - startedAt) / 1000, 0.001) : 1;
 
-  transferActive = Boolean(total || done);
+  transferActive = transferActive || Boolean(total || done);
   progressArea.classList.toggle("hidden", !transferActive);
   receiveWait.classList.toggle("hidden", role !== "receiver" || transferActive);
   progressBar.style.width = `${Math.min(pct, 100)}%`;
   progressText.textContent = `${pct}%`;
   speedText.textContent = `${formatBytes(done / seconds)}/s`;
   receivedText.textContent = `${formatBytes(done)}${total ? ` / ${formatBytes(total)}` : ""}`;
+}
+
+function setProgressSub(text) {
+  progressSub.textContent = text;
+  progressSub.classList.toggle("hidden", !text);
 }
 
 function setStatus(value) {
@@ -741,11 +1018,19 @@ function showNotice(message) {
 }
 
 function showIncomingModal() {
-  if (!receiveMeta) {
+  if (!incomingBatch) {
     return;
   }
 
-  incomingDetails.textContent = `${receiveMeta.name} · ${formatBytes(receiveMeta.size)}`;
+  const count = incomingBatch.files.length;
+  if (count === 1) {
+    incomingTitle.textContent = "Incoming file";
+    incomingDetails.textContent = `${incomingBatch.files[0].name} · ${formatBytes(batchTotal)}`;
+  } else {
+    incomingTitle.textContent = "Incoming files";
+    incomingDetails.textContent = `${count} files · ${formatBytes(batchTotal)}`;
+  }
+  modalSaveButton.disabled = false;
   incomingModal.classList.remove("hidden");
 }
 
@@ -755,9 +1040,9 @@ function hideIncomingModal() {
 
 function cancelIncomingFile() {
   hideIncomingModal();
-  showNotice("Incoming file was declined.");
-  channel?.send(JSON.stringify({ type: "receiver-cancelled" }));
-  receiveMeta = undefined;
+  showNotice("Incoming transfer declined.");
+  channel?.send(JSON.stringify({ type: "declined" }));
+  incomingBatch = undefined;
   updateReceiverControls();
 }
 

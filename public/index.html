@@ -6,6 +6,11 @@
     <title>DropStream — Direct P2P File Transfer</title>
     <meta name="description" content="Send files device to device, browser to browser. No cloud, no signup, no size limits." />
     <meta name="theme-color" content="#ecf4fc" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="DropStream" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -115,31 +120,57 @@
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
             </div>
-            <span class="dropzone-title">Tap to choose a file</span>
-            <span class="dropzone-sub">or drag &amp; drop it here</span>
-            <input id="fileInput" type="file" />
+            <span class="dropzone-title">Tap to choose files</span>
+            <span class="dropzone-sub">drag &amp; drop, or <button type="button" id="folderButton" class="link-btn">pick a folder</button></span>
+            <input id="fileInput" type="file" multiple />
+            <input id="folderInput" type="file" webkitdirectory hidden />
           </label>
 
           <div class="file-card sender-action hidden" id="fileCard">
-            <div class="file-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-              </svg>
+            <div class="file-card-head">
+              <div class="file-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+              </div>
+              <div class="file-meta">
+                <strong id="fileCardTitle">No files selected</strong>
+                <span id="fileCardSub"></span>
+              </div>
+              <button class="icon-btn-sm" id="clearFilesButton" type="button" aria-label="Clear selection" title="Clear">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
             </div>
-            <div class="file-meta">
-              <strong id="fileName">No file selected</strong>
-              <span id="fileSize"></span>
-            </div>
+            <ul class="file-list hidden" id="fileList"></ul>
             <button class="btn btn-primary btn-send" id="sendButton" type="button" disabled>
               Send
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
             </button>
           </div>
 
+          <div class="text-send sender-action">
+            <label class="field-label" for="textInput">Or send text / a link</label>
+            <div class="text-send-row">
+              <textarea id="textInput" rows="2" placeholder="Paste a message or link…"></textarea>
+              <button class="btn btn-ghost btn-text" id="sendTextButton" type="button" disabled>Send text</button>
+            </div>
+          </div>
+
+          <div class="incoming-text hidden" id="incomingTextCard">
+            <div class="incoming-text-head">
+              <span class="field-label">Received text</span>
+              <div class="incoming-text-actions">
+                <a class="link-btn hidden" id="openTextButton" target="_blank" rel="noopener">Open link</a>
+                <button class="link-btn" id="copyTextButton" type="button">Copy</button>
+              </div>
+            </div>
+            <p class="incoming-text-content" id="incomingTextContent"></p>
+          </div>
+
           <div class="receive-wait receiver-action hidden" id="receiveWait">
             <div class="pulse-ring" aria-hidden="true"><span></span><span></span></div>
-            <p>Listening for an incoming file…</p>
+            <p>Listening for incoming files…</p>
           </div>
 
           <div class="progress hidden" id="progressArea">
@@ -147,6 +178,7 @@
               <span class="progress-label">Transferring</span>
               <span class="progress-pct" id="progressText">0%</span>
             </div>
+            <p class="progress-sub hidden" id="progressSub"></p>
             <div class="meter" aria-label="Transfer progress">
               <div class="meter-fill" id="progressBar"></div>
             </div>

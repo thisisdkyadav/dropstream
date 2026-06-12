@@ -1,0 +1,19 @@
+{
+  "name": "DropStream — P2P File Transfer",
+  "short_name": "DropStream",
+  "description": "Send files device to device over an encrypted peer-to-peer channel.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ecf4fc",
+  "theme_color": "#ecf4fc",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}
