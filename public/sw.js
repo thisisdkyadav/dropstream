@@ -2,7 +2,7 @@
 // installable PWA. It deliberately never touches /api/* (TURN credentials and
 // the signaling WebSocket must always hit the network) or non-GET requests.
 
-const CACHE = "dropstream-v2";
+const CACHE = "dropstream-v3";
 const SHELL = [
   "/",
   "/app.js",
@@ -35,26 +35,27 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // App-shell navigations (including /<room-code> deep links): serve cached "/"
-  // so the app opens offline, falling back to the network when not cached.
-  if (request.mode === "navigate") {
-    event.respondWith(caches.match("/").then((cached) => cached || fetch(request)));
-    return;
-  }
-
-  // Static assets: cache-first, then populate the cache on first network hit.
+  // Network-first: always serve the freshest code when online (so updates show
+  // up immediately), and refresh the cache as we go. Fall back to the cache —
+  // and to the cached app shell for navigations — only when offline.
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-      return fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
         if (response.ok && response.type === "basic") {
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
         }
         return response;
-      });
-    })
+      })
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) {
+          return cached;
+        }
+        if (request.mode === "navigate") {
+          return caches.match("/");
+        }
+        return Response.error();
+      })
   );
 });
