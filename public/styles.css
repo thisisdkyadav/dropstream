@@ -42,8 +42,6 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
   line-height: 1.5;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -175,14 +173,11 @@ body {
 .layout {
   position: relative;
   z-index: 1;
-  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
-  flex: 1 1 auto;
-  padding: 20px 20px 40px;
+  padding: 20px 20px 56px;
   display: grid;
   grid-template-columns: 1fr;
-  align-content: center;
   gap: 40px;
 }
 
@@ -985,10 +980,10 @@ body {
   .layout {
     display: flex;
     flex-direction: row;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     gap: 56px;
-    padding: 32px 24px;
+    padding: 56px 24px 64px;
   }
 
   .hero {
@@ -1016,6 +1011,7 @@ body {
   .layout.connected .hero {
     opacity: 0;
     width: 0;
+    height: 0; /* keep the collapsed hero from inflating the row height */
     margin-right: -56px; /* swallow the flex gap */
     transform: translateX(-28px);
     pointer-events: none;
