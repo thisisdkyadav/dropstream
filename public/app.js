@@ -70,6 +70,12 @@ let passphrase = "";
 let authorized = false;
 let myAuthProof = "";
 let peerAuthProof = null;
+let intentConnected = false;
+let reconnectAttempts = 0;
+let reconnectTimer;
+let socketToken = 0;
+let peerWasConnected = false;
+const MAX_RECONNECT = 6;
 
 // Receiver-side batch state.
 let incomingBatch;
@@ -428,8 +434,9 @@ function setRole(nextRole) {
 }
 
 async function connect() {
-  disconnect();
+  teardown();
   resetTransfer();
+  setPathChip(null);
 
   const roomId = roomInput.value.trim().toLowerCase();
   if (!/^[a-z0-9-]{4,64}$/.test(roomId)) {
@@ -441,32 +448,127 @@ async function connect() {
   passphrase = passInput.value.trim();
   resetAuth();
 
+  intentConnected = true;
+  reconnectAttempts = 0;
+  clearTimeout(reconnectTimer);
   connectButton.disabled = true;
   renderUi();
+
+  await openSocket();
+}
+
+async function openSocket() {
+  const token = ++socketToken;
   await loadIceServers();
+  if (token !== socketToken) {
+    return; // A newer attempt superseded this one.
+  }
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/api/room/${roomId}?role=${role}`);
+  socket = new WebSocket(`${protocol}//${location.host}/api/room/${currentRoomId}?role=${role}`);
+
   socket.addEventListener("open", () => {
+    if (token !== socketToken) {
+      return;
+    }
     isConnected = true;
+    reconnectAttempts = 0;
+    clearTimeout(reconnectTimer);
+    peerWasConnected = false;
     setStatus("Connecting");
     showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
     renderUi();
     createPeer();
   });
-  socket.addEventListener("message", handleSignal);
+  socket.addEventListener("message", (event) => {
+    if (token === socketToken) {
+      handleSignal(event);
+    }
+  });
   socket.addEventListener("close", () => {
-    isConnected = false;
-    hideIncomingModal();
+    if (token === socketToken) {
+      onSocketClosed();
+    }
+  });
+  socket.addEventListener("error", () => {
+    if (token === socketToken) {
+      console.warn("[ws] socket error");
+    }
+  });
+}
+
+function onSocketClosed() {
+  isConnected = false;
+  if (!intentConnected) {
     setStatus("Offline");
     showNotice("Connect to start a room.");
     connectButton.disabled = false;
     renderUi();
-  });
-  socket.addEventListener("error", () => showNotice("Connection error."));
+    return;
+  }
+  triggerReconnect();
+}
 
+function triggerReconnect() {
+  if (!intentConnected) {
+    return;
+  }
+  teardown();
+  scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectAttempts += 1;
+
+  if (reconnectAttempts > MAX_RECONNECT) {
+    intentConnected = false;
+    isConnected = false;
+    setStatus("Failed");
+    showNotice("Couldn't reconnect. Tap Connect to retry.");
+    connectButton.disabled = false;
+    renderUi();
+    return;
+  }
+
+  const delay = Math.min(800 * 2 ** (reconnectAttempts - 1), 8000);
+  isConnected = false;
+  setStatus("Connecting");
+  setPathChip(null);
+  showNotice(`Connection lost — reconnecting (attempt ${reconnectAttempts})…`);
   connectButton.disabled = true;
   renderUi();
+  reconnectTimer = setTimeout(() => {
+    openSocket();
+  }, delay);
+}
+
+// Close peer + socket without changing connection intent. Bumping the token
+// makes the closing socket's handlers no-ops so teardown never re-triggers a
+// reconnect by itself.
+function teardown() {
+  socketToken += 1;
+  try { channel?.close(); } catch { /* ignore */ }
+  try { peer?.close(); } catch { /* ignore */ }
+  try { socket?.close(); } catch { /* ignore */ }
+  channel = undefined;
+  peer = undefined;
+  socket = undefined;
+  peerWasConnected = false;
+  releaseWakeLock();
+}
+
+// The other side left but our socket is still up: rebuild a fresh peer so we
+// re-handshake cleanly when they return (the sender re-offers on presence).
+function recreatePeer() {
+  try { channel?.close(); } catch { /* ignore */ }
+  try { peer?.close(); } catch { /* ignore */ }
+  channel = undefined;
+  peer = undefined;
+  peerWasConnected = false;
+  resetTransfer();
+  resetAuth();
+  createPeer();
 }
 
 async function loadIceServers() {
@@ -508,13 +610,20 @@ function createPeer() {
   });
 
   peer.addEventListener("connectionstatechange", () => {
+    if (!peer) {
+      return;
+    }
     setStatus(peer.connectionState);
     if (peer.connectionState === "connected") {
+      peerWasConnected = true;
       showNotice(role === "sender" ? "Choose files or send text." : "Ready to receive.");
       reportSelectedPair();
     }
-    if (peer.connectionState === "failed") {
-      showNotice("Could not reach the other device. Try reconnecting both sides.");
+    if (peer.connectionState === "failed" && intentConnected) {
+      // Re-join the room so presence fires and both sides re-handshake.
+      showNotice("Connection dropped — reconnecting…");
+      triggerReconnect();
+      return;
     }
     updateSendState();
     renderUi();
@@ -533,11 +642,22 @@ async function handleSignal(event) {
   const message = JSON.parse(event.data);
 
   if (message.type === "presence") {
-    if (message.peers.length < 2) {
-      showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
+    const otherRole = role === "sender" ? "receiver" : "sender";
+    const otherPresent = message.peers.includes(otherRole);
+
+    if (!otherPresent) {
+      // If we were connected and the other side dropped, rebuild a fresh peer
+      // so we cleanly re-handshake when they reconnect.
+      if (peerWasConnected) {
+        showNotice("The other device dropped — waiting for it to return…");
+        recreatePeer();
+      } else {
+        showNotice(role === "sender" ? "Waiting for receiver." : "Waiting for sender.");
+      }
+      return;
     }
 
-    if (role === "sender" && message.peers.includes("receiver") && peer && !peer.localDescription) {
+    if (role === "sender" && peer && !peer.localDescription) {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       signal({ type: "offer", description: peer.localDescription });
@@ -588,7 +708,6 @@ function setupChannel(nextChannel) {
   });
 
   channel.addEventListener("close", () => {
-    showNotice("Peer connection closed.");
     releaseWakeLock();
     updateSendState();
     updateReceiverControls();
@@ -966,19 +1085,17 @@ function signal(message) {
 }
 
 function disconnect() {
-  channel?.close();
-  peer?.close();
-  socket?.close();
-  channel = undefined;
-  peer = undefined;
-  socket = undefined;
+  intentConnected = false;
+  reconnectAttempts = 0;
+  clearTimeout(reconnectTimer);
+  teardown();
   isConnected = false;
-  releaseWakeLock();
   resetAuth();
   setStatus("Offline");
   setPathChip(null);
   hideIncomingModal();
   showNotice("Connect to start a room.");
+  connectButton.disabled = false;
   updateSendState();
   updateReceiverControls();
   renderUi();
@@ -1026,14 +1143,17 @@ function updateReceiverControls() {
 }
 
 function renderUi() {
-  transferPanel.classList.toggle("hidden", !isConnected);
-  disconnectButton.classList.toggle("hidden", !isConnected);
-  connectButton.classList.toggle("hidden", isConnected);
-  newRoomButton.disabled = isConnected;
-  roomInput.disabled = isConnected;
-  passInput.disabled = isConnected;
-  senderRole.disabled = isConnected;
-  receiverRole.disabled = isConnected;
+  // Treat an in-progress reconnect (intentConnected, not yet isConnected) as
+  // "live" so the Disconnect control stays available to cancel it.
+  const live = intentConnected;
+  transferPanel.classList.toggle("hidden", !live);
+  disconnectButton.classList.toggle("hidden", !live);
+  connectButton.classList.toggle("hidden", live);
+  newRoomButton.disabled = live;
+  roomInput.disabled = live;
+  passInput.disabled = live;
+  senderRole.disabled = live;
+  receiverRole.disabled = live;
 
   for (const element of senderActions) {
     element.classList.toggle("hidden", role !== "sender");
