@@ -8,6 +8,8 @@ DropStream is a peer-to-peer file transfer app. File bytes travel directly betwe
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)
 ![WebRTC](https://img.shields.io/badge/WebRTC-DataChannel-green)
 
+**🔗 Live demo: [dropstream.awacxo.com](https://dropstream.awacxo.com)**
+
 ---
 
 ## Features
