@@ -6,8 +6,12 @@ compatibility_date = "2026-06-08"
 directory = "./public"
 binding = "ASSETS"
 
-[vars]
-METERED_APP = "inrow"
+# Optional: use a private Metered TURN project for reliable relaying across
+# strict/symmetric NATs. Uncomment and set your "<app>.metered.live" subdomain,
+# then add the key as a secret:  npx wrangler secret put METERED_API_KEY
+# Without these, the Worker falls back to public STUN + Metered Open Relay.
+# [vars]
+# METERED_APP = "your-metered-app"
 
 [[durable_objects.bindings]]
 name = "ROOMS"

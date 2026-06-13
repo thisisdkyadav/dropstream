@@ -1,5 +1,25 @@
+# Dependencies
 node_modules/
-.wrangler/
+
+# Build / tooling
 dist/
+.wrangler/
+
+# Secrets & local env (never commit these)
 .env
+.env.*
 .dev.vars
+!.dev.vars.example
+
+# Claude Code local settings (may contain machine-specific allow rules)
+.claude/settings.local.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

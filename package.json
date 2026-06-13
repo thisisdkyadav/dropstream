@@ -1,11 +1,32 @@
 {
-  "name": "p2pfile",
-  "version": "0.1.0",
+  "name": "dropstream",
+  "version": "1.0.0",
   "private": true,
+  "description": "Peer-to-peer browser file & text transfer over WebRTC, with a Cloudflare Worker + Durable Object handling only signaling. No cloud storage, no size limits.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
+  },
+  "keywords": [
+    "webrtc",
+    "p2p",
+    "file-transfer",
+    "datachannel",
+    "cloudflare-workers",
+    "durable-objects",
+    "turn",
+    "pwa"
+  ],
+  "author": "Devesh Yadav",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thisisdkyadav/dropstream.git"
+  },
+  "homepage": "https://github.com/thisisdkyadav/dropstream#readme",
+  "bugs": {
+    "url": "https://github.com/thisisdkyadav/dropstream/issues"
   },
   "devDependencies": {
     "wrangler": "^4.20.0"

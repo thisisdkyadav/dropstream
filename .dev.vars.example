@@ -1,0 +1,12 @@
+# Local development secrets for `wrangler dev`.
+# Copy this file to `.dev.vars` (which is git-ignored) and fill in real values.
+#
+# OPTIONAL — only needed to use a private Metered TURN project for reliable
+# relaying across strict/symmetric NATs (e.g. mobile data). Without it, the app
+# falls back to public STUN + the Metered Open Relay, which works for most
+# same-network and home-router cases but not all cross-cellular ones.
+#
+# Get a key at https://dashboard.metered.ca → your TURN app → API Key.
+# Also set METERED_APP (your "<app>.metered.live" subdomain) in wrangler.toml.
+
+METERED_API_KEY = "your-metered-api-key"
