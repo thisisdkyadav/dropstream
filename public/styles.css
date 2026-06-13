@@ -968,6 +968,41 @@ body {
   from { opacity: 0; transform: translateY(14px) scale(0.97); }
 }
 
+/* Footer */
+.footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  padding: 8px 24px 40px;
+}
+
+.gh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: all 0.2s var(--ease);
+}
+
+.gh-link:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm, 0 2px 8px rgba(20, 80, 140, 0.06));
+}
+
+.gh-icon {
+  width: 18px;
+  height: 18px;
+}
+
 /* Utility */
 .hidden {
   display: none !important;
