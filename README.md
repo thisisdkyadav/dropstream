@@ -8,8 +8,6 @@ DropStream is a peer-to-peer file transfer app. File bytes travel directly betwe
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)
 ![WebRTC](https://img.shields.io/badge/WebRTC-DataChannel-green)
 
-> Replace the `thisisdkyadav/dropstream` repo path in this README and `package.json` with your own once you push it to GitHub.
-
 ---
 
 ## Features
